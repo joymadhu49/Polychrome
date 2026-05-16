@@ -61,24 +61,70 @@ struct SettingsView: View {
     // MARK: panes
 
     private var generalPane: some View {
-        SettingsSection(title: "Behavior", description: "How Polychrome handles Chrome windows.") {
-            SettingsToggle(title: "Launch at login",
-                           subtitle: "Start ChromeProfiles automatically when you log in.",
-                           isOn: $settings.launchAtLogin)
+        VStack(spacing: 18) {
+            SettingsSection(title: "Behavior", description: "How Polychrome handles Chrome windows.") {
+                SettingsToggle(title: "Launch at login",
+                               subtitle: "Start Polychrome automatically when you log in.",
+                               isOn: $settings.launchAtLogin)
+                SettingsDivider()
+                SettingsToggle(title: "Focus existing windows",
+                               subtitle: "If a profile's window is already open, raise it instead of spawning a duplicate.",
+                               isOn: $settings.focusExisting)
+            }
 
-            SettingsDivider()
-
-            SettingsToggle(title: "Focus existing windows",
-                           subtitle: "If a profile's window is already open, raise it instead of spawning a duplicate.",
-                           isOn: $settings.focusExisting)
+            SettingsSection(title: "Menu features", description: "Toggle features in the menubar popover.") {
+                SettingsToggle(title: "Group by Open / Closed",
+                               subtitle: "Show two sections: profiles with active Chrome windows, and the rest.",
+                               isOn: $settings.groupByStatus)
+                SettingsDivider()
+                SettingsToggle(title: "Quick-launch URL",
+                               subtitle: "Paste or type a URL in the search field, then click any profile to open it there.",
+                               isOn: $settings.quickLaunchEnabled)
+                SettingsDivider()
+                SettingsToggle(title: "Profile tags",
+                               subtitle: "Right-click any profile to assign a color tag (Work, Personal, Test, etc.). Tags appear as a colored dot on the avatar.",
+                               isOn: $settings.tagsEnabled)
+            }
         }
     }
 
     private var appearancePane: some View {
-        SettingsSection(title: "Menu appearance", description: "Control how profile rows look in the menubar popover.") {
-            SettingsToggle(title: "Show email addresses",
-                           subtitle: "Hide for screen-sharing or privacy.",
-                           isOn: $settings.showEmails)
+        VStack(spacing: 18) {
+            SettingsSection(title: "Theme", description: "Override the system appearance for Polychrome only.") {
+                Picker("Theme", selection: $settings.theme) {
+                    ForEach(ThemeOverride.allCases) { t in
+                        Label(t.displayName, systemImage: t.icon).tag(t)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+            }
+
+            SettingsSection(title: "Profile rows", description: "Control what's shown for each profile in the menubar popover.") {
+                SettingsToggle(title: "Show email addresses",
+                               subtitle: "Hide emails for screen-sharing or privacy.",
+                               isOn: $settings.showEmails)
+            }
+
+            if settings.tagsEnabled {
+                SettingsSection(title: "Tag palette", description: "Available tag colors. Assign tags by right-clicking a profile in the menu.") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(56), spacing: 10), count: 6), spacing: 10) {
+                        ForEach(ProfileTag.allCases.filter { $0 != .none }) { t in
+                            VStack(spacing: 4) {
+                                Circle()
+                                    .fill(t.color)
+                                    .frame(width: 22, height: 22)
+                                    .overlay(Circle().stroke(.primary.opacity(0.15), lineWidth: 0.5))
+                                Text(t.displayName)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .fixedSize()
+                        }
+                    }
+                }
+            }
         }
     }
 

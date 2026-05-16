@@ -33,12 +33,15 @@ struct HotkeyRecorder: View {
             }
             .controlSize(.small)
 
-            Toggle("Enabled", isOn: Binding(
+            Toggle(isOn: Binding(
                 get: { config.enabled },
                 set: { config.enabled = $0 }
-            ))
+            )) {
+                Text("Enabled").fixedSize()
+            }
             .toggleStyle(.switch)
             .controlSize(.small)
+            .fixedSize()
         }
         .onDisappear { stopMonitor() }
     }

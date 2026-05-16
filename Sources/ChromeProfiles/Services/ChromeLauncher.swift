@@ -16,8 +16,14 @@ enum ChromeLauncher {
     }
 
     /// If a Chrome window for this profile already exists, focus it.
-    /// Otherwise spawn a new one.
-    static func launchOrFocus(profile: ChromeProfile) {
+    /// Otherwise spawn a new one. If url given, opens that URL in the chosen profile.
+    static func launchOrFocus(profile: ChromeProfile, url: String? = nil) {
+        // If URL specified, always spawn new tab/window with that URL (Chrome handles it gracefully)
+        if let url, !url.isEmpty {
+            NSLog("[Polychrome] open URL in profile \(profile.dirName): \(url)")
+            launch(profileDir: profile.dirName, url: url)
+            return
+        }
         if let win = WindowFinder.window(forProfile: profile) {
             NSLog("[Polychrome] focus existing window for \(profile.dirName) (\(profile.displayName))")
             WindowFinder.focus(win)
@@ -27,7 +33,7 @@ enum ChromeLauncher {
         launch(profileDir: profile.dirName)
     }
 
-    static func launchMany(profiles: [ChromeProfile]) {
-        for p in profiles { launchOrFocus(profile: p) }
+    static func launchMany(profiles: [ChromeProfile], url: String? = nil) {
+        for p in profiles { launchOrFocus(profile: p, url: url) }
     }
 }

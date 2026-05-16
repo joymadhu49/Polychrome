@@ -161,22 +161,28 @@ enum WindowTiler {
     // MARK: launch-and-tile orchestration
 
     /// Reuse existing Chrome windows where possible; parallel-launch missing ones; then tile.
+    /// If `url` provided, opens that URL in each profile (new tab in existing window, or new window if none).
     @MainActor
-    static func launchAndTile(profiles: [ChromeProfile], config: LayoutConfig) async {
+    static func launchAndTile(profiles: [ChromeProfile], config: LayoutConfig, url: String? = nil) async {
         guard !profiles.isEmpty else { return }
 
-        // Snapshot current windows once
         var resolved: [String: AXUIElement] = WindowFinder.allWindowsMappedToProfiles(profiles)
         let needLaunch = profiles.filter { resolved[$0.dirName] == nil }
 
-        NSLog("[Polychrome] tile: \(resolved.count) existing, \(needLaunch.count) to launch")
+        NSLog("[Polychrome] tile: \(resolved.count) existing, \(needLaunch.count) to launch (url=\(url ?? "-"))")
 
-        // Parallel launch all missing
-        for p in needLaunch {
-            ChromeLauncher.launch(profileDir: p.dirName)
+        // For URL mode: also send URL to profiles with existing windows (opens new tab)
+        if let url, !url.isEmpty {
+            for p in profiles where resolved[p.dirName] != nil {
+                ChromeLauncher.launch(profileDir: p.dirName, url: url)
+            }
         }
 
-        // Poll for new windows (50 ms × 40 = ~2 s max)
+        // Parallel launch missing (with URL if given)
+        for p in needLaunch {
+            ChromeLauncher.launch(profileDir: p.dirName, url: url)
+        }
+
         if !needLaunch.isEmpty {
             for _ in 0..<40 {
                 try? await Task.sleep(nanoseconds: 50_000_000)
@@ -186,9 +192,11 @@ enum WindowTiler {
                 }
                 if resolved.count >= profiles.count { break }
             }
+        } else if url != nil {
+            // Give Chrome a beat to open the new tab so the window settles before we move it
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
 
-        // Order by original selection
         let ordered: [AXUIElement] = profiles.compactMap { resolved[$0.dirName] }
         guard !ordered.isEmpty else { return }
 

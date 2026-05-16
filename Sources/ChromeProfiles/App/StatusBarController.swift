@@ -12,10 +12,13 @@ final class StatusBarController {
     init(rootView: AnyView) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 360, height: 540)
         popover.behavior = .transient
         popover.animates = true
-        popover.contentViewController = NSHostingController(rootView: rootView)
+        popover.appearance = nil
+        let host = NSHostingController(rootView: rootView)
+        host.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = host
+        popover.contentSize = NSSize(width: 280, height: 440)
 
         if let button = statusItem.button {
             let img = NSImage(systemSymbolName: "rectangle.3.group.bubble.left.fill",
