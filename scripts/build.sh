@@ -28,7 +28,17 @@ if [[ -f "Bundle/AppIcon.icns" ]]; then
 fi
 
 xattr -cr "${APP_DIR}" 2>/dev/null || true
-codesign --force --deep --sign - "${APP_DIR}" || true
+
+# Prefer the persistent self-signed identity if installed (set up via scripts/setup-signing.sh).
+# Falls back to ad-hoc, which causes macOS to ask for permissions again on every rebuild.
+SIGNING_IDENTITY="${POLYCHROME_SIGNING_IDENTITY:-Polychrome Dev}"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
+    echo "==> Signing with '$SIGNING_IDENTITY' (stable, preserves TCC grants)"
+    codesign --force --deep --options runtime --sign "$SIGNING_IDENTITY" "${APP_DIR}" || true
+else
+    echo "==> No persistent identity found; using ad-hoc (run scripts/setup-signing.sh to fix re-prompts)"
+    codesign --force --deep --sign - "${APP_DIR}" || true
+fi
 
 echo "==> Built ${APP_DIR}"
 echo "Open with: open ${APP_DIR}"

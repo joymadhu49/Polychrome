@@ -52,7 +52,7 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             titleBar
-            if !axTrusted { axBanner }
+            if !axTrusted && settings.showAXBanner { axBanner }
             searchBar
             if queryIsURL { urlBanner }
             multiToolbar
@@ -75,20 +75,33 @@ struct MenuView: View {
     private var axBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.shield.fill")
-                .foregroundColor(.orange)
+                .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Accessibility required")
                     .font(.system(size: 12, weight: .semibold))
-                Text("Side-by-side + duplicate-window detection.")
+                Text("For tiling + duplicate-window detection.")
                     .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Grant") {
+            Button {
                 _ = AXPermission.isTrusted(prompt: true)
                 AXPermission.openSystemSettings()
+            } label: {
+                Text("Grant").font(.system(size: 11, weight: .medium))
             }
             .controlSize(.small)
+            Button {
+                settings.showAXBanner = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+                    .background(Circle().fill(Color.primary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .help("Hide this banner")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

@@ -31,6 +31,10 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(tagsEnabled, forKey: "tagsEnabled") }
     }
 
+    @Published var showAXBanner: Bool {
+        didSet { UserDefaults.standard.set(showAXBanner, forKey: "showAXBanner") }
+    }
+
     @Published var theme: ThemeOverride {
         didSet {
             UserDefaults.standard.set(theme.rawValue, forKey: "theme")
@@ -65,6 +69,7 @@ final class AppSettings: ObservableObject {
         self.groupByStatus = (d.object(forKey: "groupByStatus") as? Bool) ?? true
         self.quickLaunchEnabled = (d.object(forKey: "quickLaunchEnabled") as? Bool) ?? true
         self.tagsEnabled = (d.object(forKey: "tagsEnabled") as? Bool) ?? true
+        self.showAXBanner = (d.object(forKey: "showAXBanner") as? Bool) ?? true
         let themeRaw = d.string(forKey: "theme") ?? ThemeOverride.system.rawValue
         self.theme = ThemeOverride(rawValue: themeRaw) ?? .system
         if let data = d.data(forKey: "tagByDir"),

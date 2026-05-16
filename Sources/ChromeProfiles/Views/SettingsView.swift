@@ -202,26 +202,46 @@ struct SettingsView: View {
     }
 
     private var permissionPane: some View {
-        SettingsSection(title: "Accessibility",
-                        description: "Required for side-by-side window tiling. macOS prompts on first use.") {
-            HStack(spacing: 10) {
-                Image(systemName: axTrusted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 22))
-                    .foregroundColor(axTrusted ? .green : .orange)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(axTrusted ? "Permission granted" : "Permission required")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(axTrusted
-                         ? "Polychrome can position Chrome windows."
-                         : "Grant Accessibility access in System Settings → Privacy & Security → Accessibility.")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+        VStack(spacing: 18) {
+            SettingsSection(title: "Accessibility",
+                            description: "Required for side-by-side tiling and duplicate-window detection.") {
+                HStack(spacing: 10) {
+                    Image(systemName: axTrusted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(axTrusted ? Color.green : .orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(axTrusted ? "Permission granted" : "Permission required")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(axTrusted
+                             ? "Polychrome can position Chrome windows."
+                             : "Grant in System Settings → Privacy & Security → Accessibility.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
                 }
-                Spacer()
+                HStack {
+                    Button("Open System Settings") { AXPermission.openSystemSettings() }
+                    Button("Re-check") { axTrusted = AXPermission.isTrusted() }
+                }
+                SettingsDivider()
+                SettingsToggle(title: "Show banner in menu when not granted",
+                               subtitle: "Hide the orange banner at the top of the menubar popover.",
+                               isOn: $settings.showAXBanner)
             }
-            HStack {
-                Button("Open System Settings") { AXPermission.openSystemSettings() }
-                Button("Re-check") { axTrusted = AXPermission.isTrusted() }
+
+            SettingsSection(title: "Why does macOS keep asking?",
+                            description: "Polychrome is ad-hoc signed. Each rebuild gets a new signature, so macOS treats it as a new app and re-prompts.") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Workarounds")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("• Install Polychrome.app to /Applications and don't rebuild over it.")
+                    Text("• Developers: create a persistent self-signed code-signing identity in Keychain Access, then sign builds with it (see README).")
+                    Text("• On macOS 15+, a weekly Accessibility usage reminder is a system feature.")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
