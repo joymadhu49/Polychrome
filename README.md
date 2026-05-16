@@ -1,0 +1,135 @@
+# Polychrome
+
+A native macOS menubar app for managing Google Chrome profiles. Open profiles individually, focus existing windows without spawning duplicates, and tile multiple profile windows side-by-side with one click.
+
+<p align="center">
+  <img src="Bundle/AppIcon.png" width="160" alt="Polychrome icon" />
+</p>
+
+## Features
+
+- **All Chrome profiles in one menubar dropdown** — auto-detected from Chrome's `Local State`. Avatars, display names, emails.
+- **Single-click launch or focus** — if a profile's window already exists, Polychrome focuses it instead of spawning a duplicate.
+- **Multi-select + side-by-side tiling** — pick N profiles, click *Side-by-side*, and Polychrome arranges their windows on your display per your chosen layout (Smart, Row, Column, Grid, Split-H, Split-V).
+- **Custom global hotkey** — record any shortcut to open the menu from anywhere.
+- **Live profile refresh** — file system watch on Chrome's `Local State` updates the list when you add/edit profiles.
+- **Configurable display target** — tile on main display or any connected screen.
+- **Privacy toggle** — hide emails in the menu for screen-sharing.
+
+## Requirements
+
+- macOS 13 (Ventura) or later
+- Google Chrome installed at the standard location
+- Accessibility permission (required for window tiling and duplicate detection)
+
+## Install
+
+### Download DMG
+
+1. Grab the latest `.dmg` from the [Releases](https://github.com/joymadhu49/Polychrome/releases) page.
+2. Open the DMG and drag **Polychrome** into `/Applications`.
+3. Launch Polychrome. The icon appears in your menubar.
+4. The first time you use *Side-by-side*, macOS will prompt for Accessibility access — grant it in **System Settings → Privacy & Security → Accessibility**.
+
+### Build from source
+
+```bash
+git clone https://github.com/joymadhu49/Polychrome.git
+cd Polychrome
+bash scripts/build.sh
+open build/Polychrome.app
+```
+
+Requires Swift 5.9+ (ships with Xcode 15 or Command Line Tools).
+
+## Usage
+
+| Action | How |
+|---|---|
+| Open menu | Click menubar icon, or press your global hotkey (default ⌘⇧C) |
+| Launch / focus a profile | Click any profile row |
+| Select multiple | Toggle **Multi-select**, then click profiles |
+| Tile side-by-side | After selecting 2+, click **Side-by-side** |
+| Refresh profiles | Click the refresh icon next to the toolbar |
+| Change layout | **Settings → Side-by-Side** |
+| Rebind hotkey | **Settings → Hotkeys**, click the recorder, press your combo |
+| Hide emails | **Settings → Appearance** |
+
+## Why it isn't broken when Chrome already runs
+
+Polychrome reads Chrome's window titles via the macOS Accessibility API to detect whether a given profile already has a window open. If so, it raises that window. Otherwise it spawns a fresh one via `open -na "Google Chrome" --args --profile-directory=<dir>`.
+
+Title-matching tolerates hyphen, em-dash, and en-dash separators that different Chrome locales/versions emit, and matches both `displayName` (Local State `name`) and `gaia_given_name`.
+
+## Architecture
+
+```
+Sources/ChromeProfiles/
+├── App/
+│   ├── ChromeProfilesApp.swift     @main + Settings scene placeholder
+│   ├── AppDelegate.swift           Wires StatusBarController + Settings window
+│   └── StatusBarController.swift   NSStatusItem + NSPopover host
+├── Models/
+│   ├── ChromeProfile.swift         dirName, name, email, avatar
+│   ├── AppSettings.swift           ObservableObject with all prefs
+│   ├── LayoutConfig.swift          Tile layout + display selection
+│   └── HotkeyConfig.swift          Carbon keyCode + modifiers + display string
+├── Services/
+│   ├── ChromeProfileLoader.swift   Parses Local State, watches via DispatchSource
+│   ├── ChromeLauncher.swift        open -na, launchOrFocus, launchMany
+│   ├── WindowFinder.swift          AX title matching → AXUIElement per profile
+│   ├── WindowTiler.swift           Geometry math + launch-and-tile orchestration
+│   ├── HotkeyManager.swift         Carbon RegisterEventHotKey
+│   ├── LaunchAtLogin.swift         SMAppService.mainApp
+│   ├── AXPermission.swift          AXIsProcessTrustedWithOptions
+│   └── DisplayService.swift        NSScreen enumeration
+└── Views/
+    ├── MenuView.swift              Popover root (search, list, multi-action, footer)
+    ├── ProfileRow.swift            Avatar + name + email + open-state dot
+    ├── SettingsView.swift          NavigationSplitView with 5 panes
+    └── HotkeyRecorder.swift        NSEvent local monitor capture
+```
+
+## How tiling works
+
+1. `WindowTiler.launchAndTile(profiles:, config:)` is called with a selected set.
+2. `WindowFinder.allWindowsMappedToProfiles` resolves which already exist via AX title match.
+3. Missing profiles are launched **in parallel** via `open -na`.
+4. The window list is polled every 50 ms (up to ~2 s) until all profiles resolve.
+5. Frames are computed for the chosen layout on the chosen display, then `kAXPositionAttribute` and `kAXSizeAttribute` are set per window.
+
+Coordinate note: AX uses top-left origin on the primary display, while `NSScreen` uses bottom-left. `WindowTiler.primaryFlipped` handles the conversion.
+
+## Configuration files
+
+| Path | Purpose |
+|---|---|
+| `~/Library/Preferences/com.joymadhu.polychrome.plist` | UserDefaults: launchAtLogin, showEmails, focusExisting, hotkey, layout |
+| `~/Library/Application Support/Google/Chrome/Local State` | Read-only: source of profile metadata |
+
+Polychrome never writes to Chrome's data.
+
+## Building a DMG
+
+```bash
+bash scripts/make-dmg.sh
+# → build/Polychrome-1.0.0.dmg
+```
+
+## Regenerating the icon
+
+```bash
+# Drop a 1024×1024 PNG at Bundle/AppIcon.png
+bash scripts/make-icon.sh
+```
+
+## Limitations
+
+- Ad-hoc signed; first run may require **right-click → Open** to bypass Gatekeeper.
+- Profile detection requires Chrome to be installed at `/Applications/Google Chrome.app`.
+- Window-to-profile mapping relies on Chrome rendering profile names in window titles (true when multiple profiles are loaded — Chrome's default).
+- No notarization. Distribute via direct download.
+
+## License
+
+[MIT](LICENSE) © 2026 joymadhu
