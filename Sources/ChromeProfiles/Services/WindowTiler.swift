@@ -3,25 +3,7 @@ import AppKit
 import ApplicationServices
 
 enum WindowTiler {
-    static let chromeBundleID = "com.google.Chrome"
-
     // MARK: AX helpers
-
-    private static func chromeApps() -> [NSRunningApplication] {
-        NSRunningApplication.runningApplications(withBundleIdentifier: chromeBundleID)
-    }
-
-    private static func axWindows(of pid: pid_t) -> [AXUIElement] {
-        let axApp = AXUIElementCreateApplication(pid)
-        var raw: CFTypeRef?
-        let err = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &raw)
-        guard err == .success, let arr = raw as? [AXUIElement] else { return [] }
-        return arr
-    }
-
-    static func allChromeWindows() -> [AXUIElement] {
-        chromeApps().flatMap { axWindows(of: $0.processIdentifier) }
-    }
 
     static func setFrame(_ window: AXUIElement, frame: CGRect) {
         var pos = frame.origin
@@ -167,20 +149,20 @@ enum WindowTiler {
         guard !profiles.isEmpty else { return }
 
         var resolved: [String: AXUIElement] = WindowFinder.allWindowsMappedToProfiles(profiles)
-        let needLaunch = profiles.filter { resolved[$0.dirName] == nil }
+        let needLaunch = profiles.filter { resolved[$0.id] == nil }
 
         NSLog("[Polychrome] tile: \(resolved.count) existing, \(needLaunch.count) to launch (url=\(url ?? "-"))")
 
         // For URL mode: also send URL to profiles with existing windows (opens new tab)
         if let url, !url.isEmpty {
-            for p in profiles where resolved[p.dirName] != nil {
-                ChromeLauncher.launch(profileDir: p.dirName, url: url)
+            for p in profiles where resolved[p.id] != nil {
+                ChromeLauncher.launch(profile: p, url: url)
             }
         }
 
         // Parallel launch missing (with URL if given)
         for p in needLaunch {
-            ChromeLauncher.launch(profileDir: p.dirName, url: url)
+            ChromeLauncher.launch(profile: p, url: url)
         }
 
         if !needLaunch.isEmpty {
@@ -197,7 +179,7 @@ enum WindowTiler {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
 
-        let ordered: [AXUIElement] = profiles.compactMap { resolved[$0.dirName] }
+        let ordered: [AXUIElement] = profiles.compactMap { resolved[$0.id] }
         guard !ordered.isEmpty else { return }
 
         let screen = DisplayService.screen(for: config.displayID)

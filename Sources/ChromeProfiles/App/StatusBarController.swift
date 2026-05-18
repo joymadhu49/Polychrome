@@ -2,6 +2,10 @@ import Foundation
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    static let polychromeMenuWillShow = Notification.Name("Polychrome.menuWillShow")
+}
+
 @MainActor
 final class StatusBarController {
     private let statusItem: NSStatusItem
@@ -58,6 +62,7 @@ final class StatusBarController {
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+        NotificationCenter.default.post(name: .polychromeMenuWillShow, object: nil)
     }
 
     func close() {

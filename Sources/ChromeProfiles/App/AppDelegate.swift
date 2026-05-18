@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import Combine
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -8,9 +9,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = AppSettings()
     var statusBar: StatusBarController!
     var settingsWindow: NSWindow?
+    private var browserObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+
+        // Sync loader with the user's enabled-browser selection.
+        loader.enabledBrowsers = settings.enabledBrowsers
+        browserObserver = settings.$enabledBrowsers.sink { [weak self] new in
+            self?.loader.enabledBrowsers = new
+        }
 
         let root = MenuView(
             loader: loader,

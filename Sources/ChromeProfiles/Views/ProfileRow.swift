@@ -47,6 +47,7 @@ struct ProfileRow: View {
     let showEmail: Bool
     let tag: ProfileTag
     let urlMode: Bool       // true when search query is URL-like
+    let kbdFocused: Bool
     let action: () -> Void
 
     @State private var hovering = false
@@ -56,6 +57,14 @@ struct ProfileRow: View {
             HStack(spacing: 9) {
                 ZStack(alignment: .bottomTrailing) {
                     ProfileAvatar(profile: profile)
+                    // Browser glyph at bottom-left (small badge)
+                    Image(systemName: profile.browser.symbolName)
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 11, height: 11)
+                        .background(Circle().fill(Color(profile.browser.accent)))
+                        .overlay(Circle().stroke(.background, lineWidth: 1))
+                        .offset(x: -22, y: 1)
                     if tag != .none {
                         Circle()
                             .fill(tag.color)
@@ -98,7 +107,7 @@ struct ProfileRow: View {
                     Image(systemName: "arrow.up.right.square.fill")
                         .font(.system(size: 12))
                         .foregroundStyle(.tint)
-                } else if hovering {
+                } else if hovering || kbdFocused {
                     Image(systemName: "arrow.up.forward")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -111,16 +120,22 @@ struct ProfileRow: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(rowBackground)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(kbdFocused ? Color.accentColor.opacity(0.55) : .clear, lineWidth: 1.5)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.10), value: hovering)
         .animation(.easeOut(duration: 0.10), value: multiSelected)
+        .animation(.easeOut(duration: 0.10), value: kbdFocused)
     }
 
     private var rowBackground: Color {
         if multiSelected { return Color.accentColor.opacity(0.18) }
+        if kbdFocused { return Color.accentColor.opacity(0.10) }
         if hovering { return Color.primary.opacity(0.08) }
         return .clear
     }

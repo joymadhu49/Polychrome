@@ -9,9 +9,11 @@ struct MenuView: View {
 
     @State private var query: String = ""
     @State private var multiMode: Bool = false
-    @State private var multiSelected: [String] = []
-    @State private var openWindowsByDir: [String: Bool] = [:]
+    @State private var multiSelected: [String] = []   // profile.id
+    @State private var openWindowsByID: [String: Bool] = [:]
     @State private var axTrusted: Bool = AXPermission.isTrusted()
+    @State private var focusedIndex: Int = 0
+    @State private var keyMonitor: Any?
 
     // MARK: filtering
 
@@ -20,7 +22,6 @@ struct MenuView: View {
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty { return false }
         if q.hasPrefix("http://") || q.hasPrefix("https://") { return true }
-        // contains dot, no spaces, length looks like host
         if q.contains(".") && !q.contains(" ") && q.count >= 4 { return true }
         return false
     }
@@ -38,15 +39,39 @@ struct MenuView: View {
         return loader.profiles.filter {
             $0.displayName.lowercased().contains(q) ||
             ($0.email?.lowercased().contains(q) ?? false) ||
-            settings.tag(for: $0.dirName).displayName.lowercased().contains(q)
+            $0.browser.displayName.lowercased().contains(q) ||
+            settings.tag(for: $0).displayName.lowercased().contains(q)
         }
     }
 
     private var openProfiles: [ChromeProfile] {
-        filteredProfiles.filter { openWindowsByDir[$0.dirName] == true }
+        filteredProfiles.filter { openWindowsByID[$0.id] == true }
     }
     private var closedProfiles: [ChromeProfile] {
-        filteredProfiles.filter { openWindowsByDir[$0.dirName] != true }
+        filteredProfiles.filter { openWindowsByID[$0.id] != true }
+    }
+
+    /// The ordered, visible list — matches what the user sees top-to-bottom.
+    /// Used by keyboard nav to map focusedIndex to a profile.
+    private var visibleOrdered: [ChromeProfile] {
+        if settings.groupByBrowser {
+            var out: [ChromeProfile] = []
+            for b in Browser.allCases where settings.enabledBrowsers.contains(b) {
+                let group = filteredProfiles.filter { $0.browser == b }
+                out.append(contentsOf: subgroup(group))
+            }
+            return out
+        }
+        return subgroup(filteredProfiles)
+    }
+
+    private func subgroup(_ list: [ChromeProfile]) -> [ChromeProfile] {
+        if settings.groupByStatus && axTrusted {
+            let open = list.filter { openWindowsByID[$0.id] == true }
+            let closed = list.filter { openWindowsByID[$0.id] != true }
+            return open + closed
+        }
+        return list
     }
 
     var body: some View {
@@ -55,6 +80,7 @@ struct MenuView: View {
             if !axTrusted && settings.showAXBanner { axBanner }
             searchBar
             if queryIsURL { urlBanner }
+            urlHistoryChips
             multiToolbar
             Divider().opacity(0.4)
             profileList
@@ -62,12 +88,63 @@ struct MenuView: View {
             Divider().opacity(0.4)
             footer
         }
-        .frame(width: 300)
+        .frame(width: 320)
         .task {
             axTrusted = AXPermission.isTrusted()
             loader.reload()
             await refreshOpenWindowsAsync()
+            installKeyMonitor()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .polychromeMenuWillShow)) { _ in
+            axTrusted = AXPermission.isTrusted()
+            loader.reload()
+            focusedIndex = 0
+            Task { await refreshOpenWindowsAsync() }
+        }
+        .onDisappear { removeKeyMonitor() }
+    }
+
+    // MARK: keyboard nav
+
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
+            switch event.keyCode {
+            case 125: // down
+                moveFocus(by: 1)
+                return nil
+            case 126: // up
+                moveFocus(by: -1)
+                return nil
+            case 36, 76: // return, enter
+                if let p = focusedProfile() {
+                    handleTap(p)
+                    return nil
+                }
+                return event
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let m = keyMonitor { NSEvent.removeMonitor(m) }
+        keyMonitor = nil
+    }
+
+    private func moveFocus(by delta: Int) {
+        let list = visibleOrdered
+        guard !list.isEmpty else { return }
+        let next = max(0, min(list.count - 1, focusedIndex + delta))
+        focusedIndex = next
+    }
+
+    private func focusedProfile() -> ChromeProfile? {
+        let list = visibleOrdered
+        guard !list.isEmpty else { return nil }
+        let i = max(0, min(list.count - 1, focusedIndex))
+        return list[i]
     }
 
     // MARK: banners
@@ -141,6 +218,12 @@ struct MenuView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
             Spacer()
+            ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) && $0.isInstalled }), id: \.self) { b in
+                Image(systemName: b.symbolName)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(b.accent))
+                    .help(b.displayName)
+            }
             Text("\(loader.profiles.count)")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -163,6 +246,7 @@ struct MenuView: View {
             TextField(settings.quickLaunchEnabled ? "Search or paste URL" : "Search profiles", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
+                .onChange(of: query) { _ in focusedIndex = 0 }
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -179,6 +263,45 @@ struct MenuView: View {
                 .fill(Color.primary.opacity(0.06))
         )
         .padding(.horizontal, 10)
+    }
+
+    // MARK: URL history chips
+
+    @ViewBuilder
+    private var urlHistoryChips: some View {
+        let showChips = settings.quickLaunchEnabled
+            && query.isEmpty
+            && !settings.urlHistory.isEmpty
+        if showChips {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(settings.urlHistory, id: \.self) { u in
+                        Button { query = u } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "link")
+                                    .font(.system(size: 9, weight: .semibold))
+                                Text(prettyHost(u))
+                                    .font(.system(size: 10, weight: .medium))
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.primary.opacity(0.07)))
+                            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+                        }
+                        .buttonStyle(.plain)
+                        .help(u)
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+            .padding(.top, 6)
+        }
+    }
+
+    private func prettyHost(_ url: String) -> String {
+        guard let u = URL(string: url), let host = u.host else { return url }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
     private var multiToolbar: some View {
@@ -251,26 +374,94 @@ struct MenuView: View {
                         Spacer()
                     }
                     .padding(.vertical, 28)
-                } else if settings.groupByStatus {
-                    if !openProfiles.isEmpty {
-                        sectionHeader("OPEN", count: openProfiles.count, color: .green)
-                        ForEach(openProfiles) { p in row(for: p) }
-                    }
-                    if !closedProfiles.isEmpty {
-                        if !openProfiles.isEmpty {
-                            Divider().opacity(0.3).padding(.horizontal, 10).padding(.vertical, 3)
-                        }
-                        sectionHeader("CLOSED", count: closedProfiles.count, color: .secondary)
-                        ForEach(closedProfiles) { p in row(for: p) }
-                    }
                 } else {
-                    ForEach(filteredProfiles) { p in row(for: p) }
+                    if settings.groupByStatus && !axTrusted {
+                        axNeededInline
+                    }
+                    listBody
                 }
             }
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(minHeight: 240, maxHeight: 380)
+        .frame(minHeight: 260, maxHeight: 400)
+    }
+
+    @ViewBuilder
+    private var listBody: some View {
+        if settings.groupByBrowser {
+            ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) }), id: \.self) { b in
+                let group = filteredProfiles.filter { $0.browser == b }
+                if !group.isEmpty {
+                    browserHeader(b, count: group.count)
+                    statusGroupedBody(group)
+                }
+            }
+        } else {
+            statusGroupedBody(filteredProfiles)
+        }
+    }
+
+    @ViewBuilder
+    private func statusGroupedBody(_ list: [ChromeProfile]) -> some View {
+        if settings.groupByStatus && axTrusted {
+            let open = list.filter { openWindowsByID[$0.id] == true }
+            let closed = list.filter { openWindowsByID[$0.id] != true }
+            if !open.isEmpty {
+                sectionHeader("OPEN", count: open.count, color: .green)
+                ForEach(open) { p in row(for: p) }
+            }
+            if !closed.isEmpty {
+                if !open.isEmpty {
+                    Divider().opacity(0.3).padding(.horizontal, 10).padding(.vertical, 3)
+                }
+                sectionHeader("CLOSED", count: closed.count, color: .secondary)
+                ForEach(closed) { p in row(for: p) }
+            }
+        } else {
+            ForEach(list) { p in row(for: p) }
+        }
+    }
+
+    private var axNeededInline: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.orange)
+            Text("Grant Accessibility to detect open windows")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Grant") {
+                _ = AXPermission.isTrusted(prompt: true)
+                AXPermission.openSystemSettings()
+            }
+            .controlSize(.mini)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.orange.opacity(0.08))
+        .padding(.horizontal, 4)
+        .padding(.bottom, 4)
+    }
+
+    private func browserHeader(_ b: Browser, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: b.symbolName)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color(b.accent))
+            Text(b.displayName.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+            Text("\(count)")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
     private func sectionHeader(_ s: String, count: Int, color: Color) -> some View {
@@ -292,13 +483,16 @@ struct MenuView: View {
 
     @ViewBuilder
     private func row(for p: ChromeProfile) -> some View {
+        let visible = visibleOrdered
+        let focused = (visible.firstIndex(of: p) == focusedIndex)
         ProfileRow(
             profile: p,
-            multiSelected: multiSelected.contains(p.dirName),
-            isOpen: openWindowsByDir[p.dirName] == true,
+            multiSelected: multiSelected.contains(p.id),
+            isOpen: openWindowsByID[p.id] == true,
             showEmail: settings.showEmails,
-            tag: settings.tagsEnabled ? settings.tag(for: p.dirName) : .none,
-            urlMode: queryIsURL
+            tag: settings.tagsEnabled ? settings.tag(for: p) : .none,
+            urlMode: queryIsURL,
+            kbdFocused: focused
         ) {
             handleTap(p)
         }
@@ -310,21 +504,26 @@ struct MenuView: View {
             } label: { Label("Open or focus", systemImage: "arrow.up.forward.square") }
 
             Button {
-                ChromeLauncher.launch(profileDir: p.dirName)
+                ChromeLauncher.launch(profile: p)
                 dismiss()
             } label: { Label("Force new window", systemImage: "plus.rectangle.on.rectangle") }
+
+            Button {
+                ChromeLauncher.launchOrFocus(profile: p, incognito: true)
+                dismiss()
+            } label: { Label("Open incognito window", systemImage: "eyeglasses") }
 
             if settings.tagsEnabled {
                 Divider()
                 Menu {
                     ForEach(ProfileTag.allCases) { t in
                         Button {
-                            settings.setTag(t, for: p.dirName)
+                            settings.setTag(t, for: p)
                         } label: {
                             if t == .none {
                                 Label("Clear", systemImage: "xmark.circle")
                             } else {
-                                Label(t.displayName, systemImage: settings.tag(for: p.dirName) == t ? "checkmark.circle.fill" : "circle.fill")
+                                Label(t.displayName, systemImage: settings.tag(for: p) == t ? "checkmark.circle.fill" : "circle.fill")
                             }
                         }
                     }
@@ -335,19 +534,21 @@ struct MenuView: View {
 
     private func handleTap(_ p: ChromeProfile) {
         if multiMode {
-            if let i = multiSelected.firstIndex(of: p.dirName) {
+            if let i = multiSelected.firstIndex(of: p.id) {
                 multiSelected.remove(at: i)
             } else {
-                multiSelected.append(p.dirName)
+                multiSelected.append(p.id)
             }
             return
         }
         if queryIsURL {
-            ChromeLauncher.launchOrFocus(profile: p, url: normalizedURL)
+            let url = normalizedURL
+            settings.remember(url: url)
+            ChromeLauncher.launchOrFocus(profile: p, url: url)
         } else if settings.focusExisting {
             ChromeLauncher.launchOrFocus(profile: p)
         } else {
-            ChromeLauncher.launch(profileDir: p.dirName)
+            ChromeLauncher.launch(profile: p)
         }
         dismiss()
     }
@@ -369,9 +570,10 @@ struct MenuView: View {
             }
             HStack(spacing: 8) {
                 Button {
-                    let dirs = multiSelected
-                    let profilesToOpen = loader.profiles.filter { dirs.contains($0.dirName) }
+                    let ids = multiSelected
+                    let profilesToOpen = loader.profiles.filter { ids.contains($0.id) }
                     let url: String? = queryIsURL ? normalizedURL : nil
+                    if let url { settings.remember(url: url) }
                     ChromeLauncher.launchMany(profiles: profilesToOpen, url: url)
                     resetMulti()
                     dismiss()
@@ -389,9 +591,10 @@ struct MenuView: View {
                         AXPermission.openSystemSettings()
                         return
                     }
-                    let dirs = multiSelected
-                    let profilesToOpen = loader.profiles.filter { dirs.contains($0.dirName) }
+                    let ids = multiSelected
+                    let profilesToOpen = loader.profiles.filter { ids.contains($0.id) }
                     let url: String? = queryIsURL ? normalizedURL : nil
+                    if let url { settings.remember(url: url) }
                     resetMulti()
                     dismiss()
                     Task { @MainActor in
@@ -475,13 +678,27 @@ struct MenuView: View {
 
     private func refreshOpenWindowsAsync() async {
         let profiles = loader.profiles
-        let map = await Task.detached(priority: .userInitiated) {
-            WindowFinder.allWindowsMappedToProfiles(profiles)
+        let enabled = settings.enabledBrowsers
+        struct Result {
+            var titleMap: [String: AXUIElement]
+            var activeByBrowser: [Browser: Set<String>]
+        }
+        let result = await Task.detached(priority: .userInitiated) { () -> Result in
+            let titleMap = WindowFinder.allWindowsMappedToProfiles(profiles)
+            var active: [Browser: Set<String>] = [:]
+            for b in enabled {
+                let dirs = Set(profiles.filter { $0.browser == b }.map { $0.dirName })
+                active[b] = BrowserActivity.activeDirs(for: b, knownDirs: dirs)
+            }
+            return Result(titleMap: titleMap, activeByBrowser: active)
         }.value
         var dict: [String: Bool] = [:]
         for p in profiles {
-            dict[p.dirName] = map[p.dirName] != nil
+            let titleHit = result.titleMap[p.id] != nil
+            let activeHit = result.activeByBrowser[p.browser]?.contains(p.dirName) ?? false
+            dict[p.id] = titleHit || activeHit
         }
-        openWindowsByDir = dict
+        openWindowsByID = dict
+        NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(AXPermission.isTrusted()) title=\(result.titleMap.count) active=\(result.activeByBrowser)")
     }
 }

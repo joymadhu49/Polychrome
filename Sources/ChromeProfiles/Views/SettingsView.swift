@@ -7,11 +7,12 @@ struct SettingsView: View {
     @State private var selection: Tab = .general
 
     enum Tab: String, CaseIterable, Identifiable {
-        case general, appearance, layout, hotkeys, permissions
+        case general, browsers, appearance, layout, hotkeys, permissions
         var id: String { rawValue }
         var title: String {
             switch self {
             case .general:     return "General"
+            case .browsers:    return "Browsers"
             case .appearance:  return "Appearance"
             case .layout:      return "Side-by-Side"
             case .hotkeys:     return "Hotkeys"
@@ -21,6 +22,7 @@ struct SettingsView: View {
         var icon: String {
             switch self {
             case .general:     return "gearshape"
+            case .browsers:    return "globe"
             case .appearance:  return "paintbrush"
             case .layout:      return "rectangle.split.2x1"
             case .hotkeys:     return "keyboard"
@@ -43,6 +45,7 @@ struct SettingsView: View {
                 Group {
                     switch selection {
                     case .general:     generalPane
+                    case .browsers:    browsersPane
                     case .appearance:  appearancePane
                     case .layout:      layoutPane
                     case .hotkeys:     hotkeyPane
@@ -74,8 +77,12 @@ struct SettingsView: View {
 
             SettingsSection(title: "Menu features", description: "Toggle features in the menubar popover.") {
                 SettingsToggle(title: "Group by Open / Closed",
-                               subtitle: "Show two sections: profiles with active Chrome windows, and the rest.",
+                               subtitle: "Show two sections: profiles with active windows, and the rest.",
                                isOn: $settings.groupByStatus)
+                SettingsDivider()
+                SettingsToggle(title: "Group by browser",
+                               subtitle: "Split the profile list into Chrome and Brave sections.",
+                               isOn: $settings.groupByBrowser)
                 SettingsDivider()
                 SettingsToggle(title: "Quick-launch URL",
                                subtitle: "Paste or type a URL in the search field, then click any profile to open it there.",
@@ -85,6 +92,76 @@ struct SettingsView: View {
                                subtitle: "Right-click any profile to assign a color tag (Work, Personal, Test, etc.). Tags appear as a colored dot on the avatar.",
                                isOn: $settings.tagsEnabled)
             }
+        }
+    }
+
+    private var browsersPane: some View {
+        VStack(spacing: 18) {
+            SettingsSection(title: "Sources",
+                            description: "Pick which Chromium-based browsers Polychrome reads profiles from.") {
+                ForEach(Array(Browser.allCases.enumerated()), id: \.element) { idx, b in
+                    if idx > 0 { SettingsDivider() }
+                    browserRow(b)
+                }
+            }
+
+            SettingsSection(title: "Recently opened URLs",
+                            description: "Quick-launch history shown as chips under the search box.") {
+                if settings.urlHistory.isEmpty {
+                    Text("No URLs yet — paste one in the menu search to start the history.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(settings.urlHistory, id: \.self) { u in
+                            HStack {
+                                Image(systemName: "link")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                Text(u)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                            }
+                        }
+                    }
+                    Button("Clear history") { settings.clearURLHistory() }
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private func browserRow(_ b: Browser) -> some View {
+        let installed = b.isInstalled
+        let enabled = settings.enabledBrowsers.contains(b)
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: b.symbolName)
+                .font(.system(size: 18))
+                .foregroundStyle(installed ? Color(b.accent) : .secondary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(b.displayName).font(.system(size: 13, weight: .medium))
+                Text(installed ? b.dataDir.path : "Not installed")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { enabled },
+                set: { isOn in
+                    var s = settings.enabledBrowsers
+                    if isOn { s.insert(b) } else { s.remove(b) }
+                    if s.isEmpty { s.insert(.chrome) } // never empty
+                    settings.enabledBrowsers = s
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .disabled(!installed)
         }
     }
 
