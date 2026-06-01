@@ -21,6 +21,7 @@ struct MenuView: View {
         guard settings.quickLaunchEnabled else { return false }
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty { return false }
+        if q.hasPrefix("-") { return false }   // never treat a switch-like token as a URL
         if q.hasPrefix("http://") || q.hasPrefix("https://") { return true }
         if q.contains(".") && !q.contains(" ") && q.count >= 4 { return true }
         return false
@@ -99,6 +100,7 @@ struct MenuView: View {
             axTrusted = AXPermission.isTrusted()
             loader.reload()
             focusedIndex = 0
+            installKeyMonitor()   // reused popover may not re-run .task; ensure arrow/return nav is live
             Task { await refreshOpenWindowsAsync() }
         }
         .onDisappear { removeKeyMonitor() }

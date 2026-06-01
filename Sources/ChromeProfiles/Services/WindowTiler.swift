@@ -79,10 +79,20 @@ enum WindowTiler {
         let rightW = usable - leftW
         let h = rect.height - pad * 2
         let leftRect = CGRect(x: rect.minX + pad, y: rect.minY + pad, width: leftW, height: h)
-        let rightRect = CGRect(x: leftRect.maxX + pad, y: rect.minY + pad, width: rightW, height: h)
-        var out: [CGRect] = [leftRect, rightRect]
-        if n > 2 {
-            out.append(contentsOf: Array(repeating: rightRect, count: n - 2))
+        let rightX = leftRect.maxX + pad
+        if n == 2 {
+            return [leftRect, CGRect(x: rightX, y: rect.minY + pad, width: rightW, height: h)]
+        }
+        // 3+ windows: window 0 takes the left pane; stack the remaining n-1 down the right column
+        // instead of piling them all on the same frame.
+        let rightCount = n - 1
+        let cellH = (h - pad * CGFloat(rightCount - 1)) / CGFloat(rightCount)
+        var out: [CGRect] = [leftRect]
+        for i in 0..<rightCount {
+            out.append(CGRect(x: rightX,
+                              y: rect.minY + pad + (cellH + pad) * CGFloat(i),
+                              width: rightW,
+                              height: cellH))
         }
         return out
     }
@@ -135,8 +145,11 @@ enum WindowTiler {
     /// Convert an NSScreen-based rect (bottom-left origin, primary screen as anchor)
     /// to AX coords (top-left origin of primary screen).
     private static func primaryFlipped(rect: CGRect) -> CGRect {
-        guard let primary = NSScreen.screens.first else { return rect }
-        let flippedY = primary.frame.height - rect.maxY
+        // The primary display is the one anchored at the global origin (it carries the menu bar),
+        // which is not guaranteed to be NSScreen.screens.first. Anchor the flip to its top edge so
+        // rects on secondary displays convert correctly on multi-monitor setups.
+        guard let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main else { return rect }
+        let flippedY = primary.frame.maxY - rect.maxY
         return CGRect(x: rect.minX, y: flippedY, width: rect.width, height: rect.height)
     }
 

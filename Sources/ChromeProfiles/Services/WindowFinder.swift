@@ -36,7 +36,6 @@ enum WindowFinder {
         for sep in separators {
             let suffix = "\(sep)\(name)"
             if title.hasSuffix(suffix) { return true }
-            if title.contains(suffix) { return true }
         }
         return title == name
     }

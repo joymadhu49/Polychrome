@@ -160,6 +160,7 @@ struct SettingsView: View {
                 }
             ))
             .labelsHidden()
+            .accessibilityLabel(b.displayName)
             .toggleStyle(.switch)
             .disabled(!installed)
         }
@@ -379,7 +380,7 @@ struct SettingsToggle: View {
                 }
             }
             Spacer()
-            Toggle("", isOn: $isOn).labelsHidden().toggleStyle(.switch)
+            Toggle("", isOn: $isOn).labelsHidden().accessibilityLabel(title).toggleStyle(.switch)
         }
     }
 }

@@ -6,9 +6,11 @@ struct ProfileAvatar: View {
     var size: CGFloat = 28
 
     private var seedColor: Color {
-        let hash = abs(profile.dirName.hashValue)
+        // Deterministic across launches (djb2 over UTF8) — String.hashValue is per-process seeded.
+        var h: UInt64 = 5381
+        for b in profile.dirName.utf8 { h = h &* 33 &+ UInt64(b) }
         let hues: [Double] = [0.02, 0.08, 0.14, 0.28, 0.42, 0.52, 0.60, 0.72, 0.84, 0.92]
-        return Color(hue: hues[hash % hues.count], saturation: 0.58, brightness: 0.82)
+        return Color(hue: hues[Int(h % UInt64(hues.count))], saturation: 0.58, brightness: 0.82)
     }
 
     var body: some View {
