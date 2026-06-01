@@ -10,7 +10,6 @@ extension Notification.Name {
 final class StatusBarController {
     private let statusItem: NSStatusItem
     private let popover: NSPopover
-    private weak var eventMonitor: AnyObject?
     private var globalMonitor: Any?
 
     init(rootView: AnyView) {
