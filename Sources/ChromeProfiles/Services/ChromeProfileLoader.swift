@@ -17,6 +17,8 @@ final class ChromeProfileLoader: ObservableObject {
     }
 
     private var watchers: [DispatchSourceFileSystemObject] = []
+    private var reloadTask: Task<Void, Never>?
+    private var debounceTask: Task<Void, Never>?
 
     init() {
         NSLog("[ChromeProfiles] loader init")
@@ -26,12 +28,46 @@ final class ChromeProfileLoader: ObservableObject {
 
     deinit {
         for w in watchers { w.cancel() }
+        reloadTask?.cancel()
+        debounceTask?.cancel()
     }
 
+    /// Reload profiles. The disk read, JSON parse, and avatar image decoding run off the main
+    /// thread; only the published results are assigned back on the main actor, so a watcher
+    /// firing during heavy Chrome activity never hitches the UI.
     func reload() {
+        let browsers = enabledBrowsers
+        reloadTask?.cancel()
+        reloadTask = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                ChromeProfileLoader.loadAll(browsers: browsers)
+            }.value
+            if Task.isCancelled { return }
+            self?.profiles = result.profiles
+            self?.lastError = result.errors.isEmpty ? nil : result.errors.joined(separator: "\n")
+            NSLog("[ChromeProfiles] loaded \(result.profiles.count) profiles across \(browsers.count) browsers")
+        }
+    }
+
+    /// Coalesce bursts of file-system events (Chrome rewrites Local State repeatedly) into a single
+    /// reload, and re-establish the watchers afterwards: Chrome replaces Local State atomically
+    /// (write-temp + rename), which leaves our file descriptor pointing at the old, unlinked inode
+    /// so events would otherwise stop arriving.
+    private func scheduleReloadAndRewatch() {
+        debounceTask?.cancel()
+        debounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if Task.isCancelled { return }
+            guard let self else { return }
+            self.reload()
+            self.startWatching()
+        }
+    }
+
+    private nonisolated static func loadAll(browsers: Set<Browser>) -> (profiles: [ChromeProfile], errors: [String]) {
         var all: [ChromeProfile] = []
         var errors: [String] = []
-        for browser in enabledBrowsers where browser.isInstalled {
+        for browser in browsers where browser.isInstalled {
             do {
                 let part = try loadProfiles(for: browser)
                 all.append(contentsOf: part)
@@ -39,12 +75,10 @@ final class ChromeProfileLoader: ObservableObject {
                 errors.append("\(browser.displayName): \(error.localizedDescription)")
             }
         }
-        self.profiles = sorted(all)
-        self.lastError = errors.isEmpty ? nil : errors.joined(separator: "\n")
-        NSLog("[ChromeProfiles] loaded \(self.profiles.count) profiles across \(enabledBrowsers.count) browsers")
+        return (sorted(all), errors)
     }
 
-    private func loadProfiles(for browser: Browser) throws -> [ChromeProfile] {
+    private nonisolated static func loadProfiles(for browser: Browser) throws -> [ChromeProfile] {
         let url = browser.localStateURL
         let data = try Data(contentsOf: url)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -75,7 +109,7 @@ final class ChromeProfileLoader: ObservableObject {
         }
     }
 
-    private func sorted(_ list: [ChromeProfile]) -> [ChromeProfile] {
+    private nonisolated static func sorted(_ list: [ChromeProfile]) -> [ChromeProfile] {
         list.sorted { a, b in
             func rank(_ p: ChromeProfile) -> (Int, Int, Int, String) {
                 let browserRank = (p.browser == .chrome) ? 0 : 1
@@ -102,7 +136,7 @@ final class ChromeProfileLoader: ObservableObject {
                 queue: .main
             )
             src.setEventHandler { [weak self] in
-                self?.reload()
+                self?.scheduleReloadAndRewatch()
             }
             src.setCancelHandler { close(fd) }
             src.resume()

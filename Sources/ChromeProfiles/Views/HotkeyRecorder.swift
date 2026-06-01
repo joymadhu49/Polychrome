@@ -54,6 +54,11 @@ struct HotkeyRecorder: View {
     private func startMonitor() {
         stopMonitor()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            // Escape cancels recording without binding a shortcut.
+            if event.keyCode == 53 {
+                DispatchQueue.main.async { self.recording = false; self.stopMonitor() }
+                return nil
+            }
             // ignore plain modifier-only presses; require a non-modifier key
             let mods = HotkeyConfig.carbonModifiers(from: event.modifierFlags)
             guard mods != 0 else { return event }
