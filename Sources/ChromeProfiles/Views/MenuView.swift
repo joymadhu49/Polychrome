@@ -158,9 +158,10 @@ struct MenuView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Accessibility required")
                     .font(.system(size: 12, weight: .semibold))
-                Text("For tiling + duplicate-window detection.")
+                Text("For tiling + focusing the right profile window. If it shows as ON, remove the old Polychrome row, then re-add this build.")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Button {

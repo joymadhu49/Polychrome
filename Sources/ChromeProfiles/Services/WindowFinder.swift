@@ -29,15 +29,45 @@ enum WindowFinder {
         return raw as? String
     }
 
-    /// Match Chromium-style window titles. Chrome/Brave both use "page - Profile" patterns.
-    private static func titleMatches(_ title: String, profile name: String) -> Bool {
-        guard !name.isEmpty else { return false }
-        let separators = [" - ", " — ", " – "]
-        for sep in separators {
-            let suffix = "\(sep)\(name)"
-            if title.hasSuffix(suffix) { return true }
+    /// Chrome/Chromium append the active profile to the macOS *Accessibility* window title
+    /// whenever more than one profile has been used (AppleScript hides this; AX does not):
+    ///   "<page title> - <App> - <givenName>"                        e.g. "... - Google Chrome - Sumaiya"
+    ///   "<page title> - <App> - <givenName> (<profile name>)"       e.g. "... - Google Chrome - Joy (JOY_M)"
+    /// where <App> is `browser.displayName` ("Google Chrome" / "Brave"). The givenName maps to
+    /// `ChromeProfile.givenName` and the parenthetical to `ChromeProfile.displayName`.
+    ///
+    /// Returns nil when the marker is absent — single-profile browsers (Brave, or Chrome with one
+    /// profile) omit it, and those are covered by the lone-window + lsof fallback instead.
+    /// Uses the LAST (`.backwards`) marker occurrence so a page title that itself contains
+    /// " - Google Chrome - " can't fool the parser.
+    private static func profileToken(from title: String, appLabel: String) -> (given: String, name: String?)? {
+        // Chrome uses " - " (ASCII hyphen) on English systems; tolerate em/en-dash locale variants.
+        for sep in [" - ", " — ", " – "] {
+            let marker = "\(sep)\(appLabel)\(sep)"
+            guard let r = title.range(of: marker, options: .backwards) else { continue }
+            var token = String(title[r.upperBound...])
+            var name: String?
+            if token.hasSuffix(")"), let open = token.range(of: " (", options: .backwards) {
+                let inner = token[token.index(open.lowerBound, offsetBy: 2)..<token.index(before: token.endIndex)]
+                name = String(inner)
+                token = String(token[..<open.lowerBound])
+            }
+            guard !token.isEmpty else { continue }
+            return (token, name.flatMap { $0.isEmpty ? nil : $0 })
         }
-        return title == name
+        return nil
+    }
+
+    /// True when the AX window `title` belongs to `profile`, by parsing Chrome's profile token.
+    private static func titleMatches(_ title: String, profile: ChromeProfile) -> Bool {
+        guard let tok = profileToken(from: title, appLabel: profile.browser.displayName) else { return false }
+        // A parenthetical ("Joy (JOY_M)") appears iff Chrome's profile name differs from the gaia
+        // given name; require it to equal THIS profile's displayName. Matching the given name when a
+        // parenthetical is present would let a profile grab a sibling window that merely shares a
+        // given name, focusing the wrong account.
+        if let n = tok.name { return n == profile.displayName }
+        // No parenthetical iff name == given name, so the token is both — match displayName exactly.
+        return tok.given == profile.displayName
     }
 
     static func pid(of window: AXUIElement) -> pid_t {
@@ -47,26 +77,23 @@ enum WindowFinder {
     }
 
     /// Find the window we can *confidently* attribute to the given profile (scans only this
-    /// profile's browser). On macOS this is only possible in two cases:
-    ///   1. Title-suffix match — the browser put the profile name in the window title. Some
-    ///      Brave/Chromium setups do this; default Chrome on macOS does NOT (the title is just
-    ///      the active tab's page title), so this rarely fires for Chrome.
+    /// profile's browser). On macOS this works in two cases:
+    ///   1. AX-title profile-token match — Chrome/Chromium append the profile to the *Accessibility*
+    ///      window title once more than one profile has been used (see `profileToken`). This is the
+    ///      common, reliable case for multi-profile Chrome and is the one that was previously broken.
     ///   2. A single lone window AND lsof confirms *this* profile is the one running. Guarding
     ///      on `isActive` is essential: without it, clicking a *closed* profile while a different
     ///      profile owns the only window would focus the wrong account. Covers Brave / single-
     ///      profile Chrome, which omit the profile from the title.
-    /// Returns nil when several profiles' windows coexist with no profile in their titles —
-    /// the Accessibility API cannot tell them apart (they share one PID), so the caller must
-    /// fall back to relaunching with `--profile-directory`.
+    /// Returns nil when several profiles' windows coexist and none carry an identifiable profile
+    /// token (e.g. a non-English Chrome whose title format differs), so the caller can fall back to
+    /// relaunching with `--profile-directory`.
     static func window(forProfile profile: ChromeProfile) -> AXUIElement? {
-        let candidates = [profile.displayName, profile.givenName ?? ""].filter { !$0.isEmpty }
         var allWindows: [AXUIElement] = []
         for app in runningApps(for: profile.browser) {
             for w in windows(of: app.processIdentifier) {
                 guard let title = axTitle(of: w) else { continue }
-                for name in candidates where titleMatches(title, profile: name) {
-                    return w
-                }
+                if titleMatches(title, profile: profile) { return w }
                 allWindows.append(w)
             }
         }
@@ -77,34 +104,34 @@ enum WindowFinder {
     /// Build a map of profile.id → AXUIElement for the given profiles.
     static func allWindowsMappedToProfiles(_ profiles: [ChromeProfile]) -> [String: AXUIElement] {
         var out: [String: AXUIElement] = [:]
-        // browser -> nameToProfileId
-        var browserIndex: [Browser: [String: String]] = [:]
         var browserProfiles: [Browser: [ChromeProfile]] = [:]
-        for p in profiles {
-            var idx = browserIndex[p.browser] ?? [:]
-            idx[p.displayName] = p.id
-            if let g = p.givenName, !g.isEmpty, idx[g] == nil { idx[g] = p.id }
-            browserIndex[p.browser] = idx
-            browserProfiles[p.browser, default: []].append(p)
-        }
+        for p in profiles { browserProfiles[p.browser, default: []].append(p) }
+
         var unmatchedByBrowser: [Browser: [AXUIElement]] = [:]
-        for (browser, app) in allBrowserApps(Set(browserIndex.keys)) {
-            guard let idx = browserIndex[browser] else { continue }
+        for (browser, app) in allBrowserApps(Set(browserProfiles.keys)) {
+            let profilesOfBrowser = browserProfiles[browser] ?? []
             for w in windows(of: app.processIdentifier) {
                 guard let title = axTitle(of: w) else { continue }
-                var matched = false
-                for (name, pid) in idx where titleMatches(title, profile: name) {
-                    if out[pid] == nil { out[pid] = w }
-                    matched = true
-                    break
+                // Prefer a parenthetical display-name match over a given-name match so two profiles
+                // that share a given name (e.g. "Joy (JOY_M)" vs "Joy (Personal)") don't collide.
+                guard let tok = profileToken(from: title, appLabel: browser.displayName) else {
+                    unmatchedByBrowser[browser, default: []].append(w)
+                    continue
                 }
-                if !matched {
+                let byName = tok.name.flatMap { n in profilesOfBrowser.first { $0.displayName == n } }
+                let match = byName
+                    ?? profilesOfBrowser.first { p in (p.givenName.map { !$0.isEmpty && tok.given == $0 } ?? false) }
+                    ?? profilesOfBrowser.first { $0.displayName == tok.given }
+                if let p = match {
+                    if out[p.id] == nil { out[p.id] = w }
+                } else {
                     unmatchedByBrowser[browser, default: []].append(w)
                 }
             }
         }
-        // Fallback: per-browser, if exactly one window unmatched and exactly one profile of that browser
-        // is unmapped, pair them. Handles Brave (no profile name in title) for the common single-profile case.
+        // Fallback: per-browser, if exactly one window is unmatched and exactly one profile of that
+        // browser is still unmapped, pair them. Handles Brave / single-profile Chrome (no profile
+        // token in the title) for the common single-profile case.
         for (browser, unmatched) in unmatchedByBrowser where unmatched.count == 1 {
             let profilesOfBrowser = browserProfiles[browser] ?? []
             let unmapped = profilesOfBrowser.filter { out[$0.id] == nil }
@@ -119,6 +146,41 @@ enum WindowFinder {
     static func allBrowserTitles(_ browsers: Set<Browser> = Set(Browser.allCases)) -> [String] {
         allBrowserApps(browsers).flatMap { (_, app) in
             windows(of: app.processIdentifier).compactMap(axTitle)
+        }
+    }
+
+    /// OFF by default. Set the env var `POLYCHROME_AXDUMP=1` before launching the (AX-granted) app
+    /// to log, per Chrome/Brave window, the AX window title plus a depth-limited dump of every
+    /// descendant's role/title/description/roleDescription. Lets the lead confirm exactly what
+    /// Chrome exposes via AX without changing production behaviour. Runs entirely off the main
+    /// thread; `kAXChildrenAttribute` reads are synchronous IPC to Chrome and can block, so the
+    /// descent is capped at `maxDepth` (children-only, no AXParent walking).
+    static func debugDumpAXIfEnabled(maxDepth: Int = 4) {
+        guard ProcessInfo.processInfo.environment["POLYCHROME_AXDUMP"] == "1" else { return }
+        func attr(_ el: AXUIElement, _ a: String) -> String {
+            var raw: CFTypeRef?
+            AXUIElementCopyAttributeValue(el, a as CFString, &raw)
+            return (raw as? String) ?? ""
+        }
+        func children(_ el: AXUIElement) -> [AXUIElement] {
+            var raw: CFTypeRef?
+            AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw)
+            return (raw as? [AXUIElement]) ?? []
+        }
+        func walk(_ el: AXUIElement, _ depth: Int) {
+            let pad = String(repeating: "  ", count: depth)
+            NSLog("[AXDUMP]\(pad)[\(attr(el, kAXRoleAttribute as String))] rd='\(attr(el, kAXRoleDescriptionAttribute as String))' title='\(attr(el, kAXTitleAttribute as String))' desc='\(attr(el, kAXDescriptionAttribute as String))'")
+            if depth < maxDepth { for c in children(el) { walk(c, depth + 1) } }
+        }
+        Task.detached(priority: .utility) {
+            for b in Browser.allCases {
+                for app in NSRunningApplication.runningApplications(withBundleIdentifier: b.bundleID) {
+                    for (i, w) in windows(of: app.processIdentifier).enumerated() {
+                        NSLog("[AXDUMP] ==== \(b.displayName) WIN[\(i)] title='\(axTitle(of: w) ?? "")' ====")
+                        for c in children(w) { walk(c, 1) }
+                    }
+                }
+            }
         }
     }
 

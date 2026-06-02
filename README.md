@@ -59,7 +59,7 @@ Requires Swift 5.9+ (ships with Xcode 15 or Command Line Tools).
 
 Polychrome reads Chrome's window titles via the macOS Accessibility API to detect whether a given profile already has a window open. If so, it raises that window. Otherwise it spawns a fresh one via `open -na "Google Chrome" --args --profile-directory=<dir>`.
 
-Title-matching tolerates hyphen, em-dash, and en-dash separators that different Chrome locales/versions emit, and matches both `displayName` (Local State `name`) and `gaia_given_name`.
+Detection parses Chrome's **Accessibility** window title, which — unlike the AppleScript title — carries the active profile once more than one profile has been used: `"<page> - <App> - <givenName>"`, or `"<page> - <App> - <givenName> (<profile name>)"` when the profile `name` differs from its `gaia_given_name`. The parser tolerates hyphen/em-dash/en-dash separators and matches the profile's `displayName` (Local State `name`). Single-profile browsers (Brave, or Chrome with one profile) omit the marker and are handled by a lone-window + `lsof` activity check instead.
 
 ## Architecture
 
