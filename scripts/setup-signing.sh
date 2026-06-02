@@ -52,6 +52,16 @@ openssl pkcs12 -export -legacy \
 security import "$TMP/cert.p12" -f pkcs12 -P "$PASS" -k "$KEYCHAIN" \
     -T /usr/bin/codesign -T /usr/bin/security -A >/dev/null
 
+# Mark the cert as trusted for CODE SIGNING. Without this the freshly-imported self-signed
+# cert is CSSMERR_TP_NOT_TRUSTED, so `security find-identity -v -p codesigning` (the valid-only
+# form build.sh gates on) does NOT list it — build.sh then falls back to ad-hoc and the
+# Accessibility grant dies on every rebuild. This is the step that makes the identity usable.
+# May prompt once for admin/Touch ID; that is expected and one-time.
+security add-trusted-cert -d -r trustAsRoot -p codeSign -k "$KEYCHAIN" "$TMP/cert.pem" \
+    >/dev/null 2>&1 || \
+    echo "    (note: add-trusted-cert did not complete non-interactively; if 'find-identity -v' still" \
+         "omits '$CERT_NAME', open Keychain Access > '$CERT_NAME' > Get Info > Trust > Code Signing: Always Trust)"
+
 # Authorize codesign to use the private key without a UI prompt
 security set-key-partition-list \
     -S "apple-tool:,apple:,codesign:" -s -k "" "$KEYCHAIN" >/dev/null 2>&1 || true

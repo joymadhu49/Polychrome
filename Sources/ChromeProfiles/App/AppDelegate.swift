@@ -14,6 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        // Diagnostics only; no-op unless POLYCHROME_AXDUMP=1 is set in the environment.
+        WindowFinder.debugDumpAXIfEnabled()
+
         // Sync loader with the user's enabled-browser selection.
         loader.enabledBrowsers = settings.enabledBrowsers
         browserObserver = settings.$enabledBrowsers.sink { [weak self] new in

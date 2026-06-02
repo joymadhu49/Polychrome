@@ -48,34 +48,4 @@ enum BrowserActivity {
     static func isActive(_ profile: ChromeProfile) -> Bool {
         activeDirs(for: profile.browser, knownDirs: [profile.dirName]).contains(profile.dirName)
     }
-
-    /// AX main window of the first running instance of this browser, if any.
-    static func mainWindow(for browser: Browser) -> AXUIElement? {
-        for app in NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID) {
-            let axApp = AXUIElementCreateApplication(app.processIdentifier)
-            var raw: CFTypeRef?
-            let err = AXUIElementCopyAttributeValue(axApp, kAXMainWindowAttribute as CFString, &raw)
-            if err == .success, let v = raw, CFGetTypeID(v) == AXUIElementGetTypeID() {
-                return (v as! AXUIElement)
-            }
-            // Fallback: first window from kAXWindowsAttribute
-            var rawWins: CFTypeRef?
-            let err2 = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &rawWins)
-            if err2 == .success, let arr = rawWins as? [AXUIElement], let w = arr.first {
-                return w
-            }
-        }
-        return nil
-    }
-
-    /// Bring the browser app to front. Works without AX permission.
-    static func activateApp(_ browser: Browser) {
-        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID).first {
-            if #available(macOS 14.0, *) {
-                app.activate()
-            } else {
-                app.activate(options: [.activateIgnoringOtherApps])
-            }
-        }
-    }
 }
