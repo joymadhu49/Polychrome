@@ -61,28 +61,22 @@ enum ChromeLauncher {
         // hundreds of ms. Run it off the main thread so a profile click never freezes the UI;
         // hop back to the main actor for the AppKit/AX activation.
         Task.detached(priority: .userInitiated) {
-            // 1) AX title match (works for Chrome multi-profile, Brave 2+ profiles).
+            // 1) Focus an existing window only when we can confidently tie it to this profile
+            //    (title carries the profile name, or a lone window confirmed active via lsof).
             if let win = WindowFinder.window(forProfile: profile) {
-                NSLog("[Polychrome] focus existing window for \(profile.id) by AX title")
+                NSLog("[Polychrome] focus existing window for \(profile.id)")
                 await MainActor.run { WindowFinder.focus(win) }
                 return
             }
-            // 2) lsof fallback (Brave with single profile, or any browser whose
-            //    window titles don't include the profile name).
-            if BrowserActivity.isActive(profile) {
-                NSLog("[Polychrome] \(profile.id) is active per lsof; activating browser")
-                let win = BrowserActivity.mainWindow(for: profile.browser)
-                await MainActor.run {
-                    if let win {
-                        WindowFinder.focus(win)
-                    } else {
-                        BrowserActivity.activateApp(profile.browser)
-                    }
-                }
-                return
-            }
-            // 3) Nothing matched — spawn a new window.
-            NSLog("[Polychrome] no existing window for \(profile.id); launching")
+            // 2) Can't identify the window. This is the normal case for Chrome with several
+            //    profiles open: macOS Chrome keeps the profile name out of the window title and
+            //    every window shares one process, so the Accessibility API cannot distinguish
+            //    one profile's window from another's. Re-launching with --profile-directory is
+            //    the only reliable way to bring this exact profile to the front — Chrome routes
+            //    the request to its running instance and surfaces a window for that profile.
+            //    (A bare `open --profile-directory` with no URL is a no-op once Chrome is
+            //    running, so `launch` uses `open -na`, which reliably surfaces the profile.)
+            NSLog("[Polychrome] no identifiable window for \(profile.id); surfacing profile via relaunch")
             await MainActor.run { launch(profile: profile) }
         }
     }

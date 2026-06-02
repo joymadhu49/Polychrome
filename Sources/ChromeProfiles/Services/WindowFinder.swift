@@ -46,11 +46,18 @@ enum WindowFinder {
         return p
     }
 
-    /// Find a window matching the given profile (only scans this profile's browser).
-    /// Strategy:
-    ///   1. Title-suffix match against profile displayName / givenName (Chrome shows profile name in titlebar).
-    ///   2. Fallback: if exactly one window of this browser exists, treat it as the active profile's window.
-    ///      (Brave omits profile name from title by default; user typically runs one Brave profile.)
+    /// Find the window we can *confidently* attribute to the given profile (scans only this
+    /// profile's browser). On macOS this is only possible in two cases:
+    ///   1. Title-suffix match — the browser put the profile name in the window title. Some
+    ///      Brave/Chromium setups do this; default Chrome on macOS does NOT (the title is just
+    ///      the active tab's page title), so this rarely fires for Chrome.
+    ///   2. A single lone window AND lsof confirms *this* profile is the one running. Guarding
+    ///      on `isActive` is essential: without it, clicking a *closed* profile while a different
+    ///      profile owns the only window would focus the wrong account. Covers Brave / single-
+    ///      profile Chrome, which omit the profile from the title.
+    /// Returns nil when several profiles' windows coexist with no profile in their titles —
+    /// the Accessibility API cannot tell them apart (they share one PID), so the caller must
+    /// fall back to relaunching with `--profile-directory`.
     static func window(forProfile profile: ChromeProfile) -> AXUIElement? {
         let candidates = [profile.displayName, profile.givenName ?? ""].filter { !$0.isEmpty }
         var allWindows: [AXUIElement] = []
@@ -63,7 +70,7 @@ enum WindowFinder {
                 allWindows.append(w)
             }
         }
-        if allWindows.count == 1 { return allWindows[0] }
+        if allWindows.count == 1, BrowserActivity.isActive(profile) { return allWindows[0] }
         return nil
     }
 
