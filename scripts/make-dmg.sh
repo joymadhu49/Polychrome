@@ -3,7 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_NAME="Polychrome"
-VERSION="${1:-1.0.0}"
+DEFAULT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Bundle/Info.plist 2>/dev/null || echo 1.0.0)"
+VERSION="${1:-$DEFAULT_VERSION}"
 APP="build/${APP_NAME}.app"
 DMG="build/${APP_NAME}-${VERSION}.dmg"
 
