@@ -14,6 +14,7 @@ struct MenuView: View {
     @State private var axTrusted: Bool = AXPermission.isTrusted()
     @State private var focusedIndex: Int = 0
     @State private var keyMonitor: Any?
+    @State private var menuVisible: Bool = false
     @FocusState private var searchFocused: Bool
 
     // MARK: filtering
@@ -87,6 +88,7 @@ struct MenuView: View {
         .frame(width: 320)
         .task {
             axTrusted = AXPermission.isTrusted()
+            menuVisible = true
             loader.reload()
             await refreshOpenWindowsAsync()
             installKeyMonitor()
@@ -94,6 +96,7 @@ struct MenuView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .polychromeMenuWillShow)) { _ in
             axTrusted = AXPermission.isTrusted()
+            menuVisible = true
             loader.reload()
             query = ""            // fresh start on every open, like Spotlight
             focusedIndex = 0
@@ -101,7 +104,17 @@ struct MenuView: View {
             focusSearch()
             Task { await refreshOpenWindowsAsync() }
         }
-        .onDisappear { removeKeyMonitor() }
+        // Live-refresh the OPEN list while the menu is showing, so closing a window
+        // (or one that finishes launching) updates the dots without a manual refresh.
+        // No-op while hidden — the reused popover keeps this view alive between opens.
+        .onReceive(Timer.publish(every: 2.5, on: .main, in: .common).autoconnect()) { _ in
+            guard menuVisible else { return }
+            Task { await refreshOpenWindowsAsync() }
+        }
+        .onDisappear {
+            menuVisible = false
+            removeKeyMonitor()
+        }
     }
 
     // MARK: keyboard nav
@@ -746,6 +759,14 @@ struct MenuView: View {
     private func refreshOpenWindowsAsync() async {
         let profiles = loader.profiles
         let enabled = settings.enabledBrowsers
+        // "Open" must mean "has a visible window," not "the browser process is holding
+        // this profile's files open." Chrome keeps per-profile files open (sync, leveldb,
+        // extension service workers, background apps) long after the last window of that
+        // profile is closed — so lsof reports the profile as active with NO window. That's
+        // the phantom green dot that sticks at the top of OPEN and never clears on refresh.
+        // When AX is granted (the only time the OPEN section is shown) the AX window scan is
+        // authoritative; lsof is used only as a fallback when AX can't see windows at all.
+        let trusted = axTrusted
         struct Result {
             var titleMap: [String: AXUIElement]
             var activeByBrowser: [Browser: Set<String>]
@@ -753,9 +774,12 @@ struct MenuView: View {
         let result = await Task.detached(priority: .userInitiated) { () -> Result in
             let titleMap = WindowFinder.allWindowsMappedToProfiles(profiles)
             var active: [Browser: Set<String>] = [:]
-            for b in enabled {
-                let dirs = Set(profiles.filter { $0.browser == b }.map { $0.dirName })
-                active[b] = BrowserActivity.activeDirs(for: b, knownDirs: dirs)
+            if !trusted {
+                // Only pay for the lsof scan when we have no AX window data to rely on.
+                for b in enabled {
+                    let dirs = Set(profiles.filter { $0.browser == b }.map { $0.dirName })
+                    active[b] = BrowserActivity.activeDirs(for: b, knownDirs: dirs)
+                }
             }
             return Result(titleMap: titleMap, activeByBrowser: active)
         }.value
@@ -763,9 +787,9 @@ struct MenuView: View {
         for p in profiles {
             let titleHit = result.titleMap[p.id] != nil
             let activeHit = result.activeByBrowser[p.browser]?.contains(p.dirName) ?? false
-            dict[p.id] = titleHit || activeHit
+            dict[p.id] = trusted ? titleHit : activeHit
         }
         openWindowsByID = dict
-        NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(AXPermission.isTrusted()) title=\(result.titleMap.count) active=\(result.activeByBrowser)")
+        NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(trusted) title=\(result.titleMap.count) active=\(result.activeByBrowser)")
     }
 }
