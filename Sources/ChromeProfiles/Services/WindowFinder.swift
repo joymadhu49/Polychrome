@@ -101,16 +101,32 @@ enum WindowFinder {
         return nil
     }
 
-    /// Build a map of profile.id → AXUIElement for the given profiles.
-    static func allWindowsMappedToProfiles(_ profiles: [ChromeProfile]) -> [String: AXUIElement] {
-        var out: [String: AXUIElement] = [:]
+    /// Per-browser snapshot of currently open windows.
+    struct WindowScan {
+        /// profile.id → a window we could attribute to it (title-token match, or the
+        /// lone-window fallback for opaque single-profile browsers).
+        var windowByProfileID: [String: AXUIElement] = [:]
+        /// browser → total AX window count of its running process(es).
+        var windowCount: [Browser: Int] = [:]
+        /// browser → number of windows matched via an actual profile token in the title.
+        /// Zero means the browser is "title-opaque" (Brave / single-profile Chrome omit
+        /// the profile from AX titles); >0 means "title-transparent" (Chrome multi-profile,
+        /// where AX alone can identify every open window and lsof is unnecessary).
+        var tokenMatchCount: [Browser: Int] = [:]
+    }
+
+    /// Scan every running browser's windows and attribute them to profiles where possible.
+    static func scanWindows(_ profiles: [ChromeProfile]) -> WindowScan {
+        var scan = WindowScan()
         var browserProfiles: [Browser: [ChromeProfile]] = [:]
         for p in profiles { browserProfiles[p.browser, default: []].append(p) }
 
         var unmatchedByBrowser: [Browser: [AXUIElement]] = [:]
         for (browser, app) in allBrowserApps(Set(browserProfiles.keys)) {
             let profilesOfBrowser = browserProfiles[browser] ?? []
-            for w in windows(of: app.processIdentifier) {
+            let ws = windows(of: app.processIdentifier)
+            scan.windowCount[browser, default: 0] += ws.count
+            for w in ws {
                 guard let title = axTitle(of: w) else { continue }
                 // Prefer a parenthetical display-name match over a given-name match so two profiles
                 // that share a given name (e.g. "Joy (JOY_M)" vs "Joy (Personal)") don't collide.
@@ -123,7 +139,8 @@ enum WindowFinder {
                     ?? profilesOfBrowser.first { p in (p.givenName.map { !$0.isEmpty && tok.given == $0 } ?? false) }
                     ?? profilesOfBrowser.first { $0.displayName == tok.given }
                 if let p = match {
-                    if out[p.id] == nil { out[p.id] = w }
+                    scan.tokenMatchCount[browser, default: 0] += 1
+                    if scan.windowByProfileID[p.id] == nil { scan.windowByProfileID[p.id] = w }
                 } else {
                     unmatchedByBrowser[browser, default: []].append(w)
                 }
@@ -134,12 +151,34 @@ enum WindowFinder {
         // token in the title) for the common single-profile case.
         for (browser, unmatched) in unmatchedByBrowser where unmatched.count == 1 {
             let profilesOfBrowser = browserProfiles[browser] ?? []
-            let unmapped = profilesOfBrowser.filter { out[$0.id] == nil }
+            let unmapped = profilesOfBrowser.filter { scan.windowByProfileID[$0.id] == nil }
             if unmapped.count == 1 {
-                out[unmapped[0].id] = unmatched[0]
+                scan.windowByProfileID[unmapped[0].id] = unmatched[0]
             }
         }
-        return out
+        return scan
+    }
+
+    /// Build a map of profile.id → AXUIElement for the given profiles.
+    static func allWindowsMappedToProfiles(_ profiles: [ChromeProfile]) -> [String: AXUIElement] {
+        scanWindows(profiles).windowByProfileID
+    }
+
+    /// True when the browser has at least one on-screen window. Lets callers tell an
+    /// "active" profile (per lsof) that actually has a window from one that's merely a
+    /// background process holding files open.
+    static func hasWindows(_ browser: Browser) -> Bool {
+        for app in runningApps(for: browser) where !windows(of: app.processIdentifier).isEmpty {
+            return true
+        }
+        return false
+    }
+
+    /// Bring the browser's existing windows to the front without spawning a new one.
+    static func activate(_ browser: Browser) {
+        for app in runningApps(for: browser) {
+            app.activate(options: [.activateIgnoringOtherApps])
+        }
     }
 
     /// Debug helper.

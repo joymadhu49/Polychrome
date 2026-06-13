@@ -759,37 +759,48 @@ struct MenuView: View {
     private func refreshOpenWindowsAsync() async {
         let profiles = loader.profiles
         let enabled = settings.enabledBrowsers
-        // "Open" must mean "has a visible window," not "the browser process is holding
-        // this profile's files open." Chrome keeps per-profile files open (sync, leveldb,
-        // extension service workers, background apps) long after the last window of that
-        // profile is closed — so lsof reports the profile as active with NO window. That's
-        // the phantom green dot that sticks at the top of OPEN and never clears on refresh.
-        // When AX is granted (the only time the OPEN section is shown) the AX window scan is
-        // authoritative; lsof is used only as a fallback when AX can't see windows at all.
+        // "Open" must mean "has a visible window," not "the browser process is holding this
+        // profile's files open." Chrome keeps per-profile files open (sync, leveldb, extension
+        // service workers, background apps) long after the last window of that profile closes,
+        // so lsof alone reports a closed profile as active — the phantom green dot that sticks
+        // at the top of OPEN and never clears. So we go per-browser:
+        //   • title-transparent (Chrome multi-profile): AX titles name every open window →
+        //     trust them, skip lsof → closed profiles' leases can't create phantoms.
+        //   • title-opaque WITH windows (Brave, single-profile Chrome): titles omit the
+        //     profile → fall back to lsof to tell which profiles are live.
+        //   • no windows at all: nothing is open, regardless of any lingering background process.
         let trusted = axTrusted
         struct Result {
-            var titleMap: [String: AXUIElement]
+            var scan: WindowFinder.WindowScan
             var activeByBrowser: [Browser: Set<String>]
         }
         let result = await Task.detached(priority: .userInitiated) { () -> Result in
-            let titleMap = WindowFinder.allWindowsMappedToProfiles(profiles)
+            let scan = WindowFinder.scanWindows(profiles)
             var active: [Browser: Set<String>] = [:]
-            if !trusted {
-                // Only pay for the lsof scan when we have no AX window data to rely on.
-                for b in enabled {
+            for b in enabled {
+                let transparent = (scan.tokenMatchCount[b] ?? 0) > 0
+                let hasWindows = (scan.windowCount[b] ?? 0) > 0
+                // Only pay for lsof where AX can't name the windows itself.
+                if !trusted || (!transparent && hasWindows) {
                     let dirs = Set(profiles.filter { $0.browser == b }.map { $0.dirName })
                     active[b] = BrowserActivity.activeDirs(for: b, knownDirs: dirs)
                 }
             }
-            return Result(titleMap: titleMap, activeByBrowser: active)
+            return Result(scan: scan, activeByBrowser: active)
         }.value
         var dict: [String: Bool] = [:]
         for p in profiles {
-            let titleHit = result.titleMap[p.id] != nil
-            let activeHit = result.activeByBrowser[p.browser]?.contains(p.dirName) ?? false
-            dict[p.id] = trusted ? titleHit : activeHit
+            let b = p.browser
+            let windowHit = result.scan.windowByProfileID[p.id] != nil
+            let activeHit = result.activeByBrowser[b]?.contains(p.dirName) ?? false
+            if trusted {
+                let transparent = (result.scan.tokenMatchCount[b] ?? 0) > 0
+                dict[p.id] = transparent ? windowHit : (windowHit || activeHit)
+            } else {
+                dict[p.id] = activeHit
+            }
         }
         openWindowsByID = dict
-        NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(trusted) title=\(result.titleMap.count) active=\(result.activeByBrowser)")
+        NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(trusted) windows=\(result.scan.windowByProfileID.count) tokens=\(result.scan.tokenMatchCount) active=\(result.activeByBrowser)")
     }
 }
