@@ -70,11 +70,21 @@ enum ChromeLauncher {
                 await MainActor.run { WindowFinder.focus(win) }
                 return
             }
-            // 2) No window we can attribute to this profile (profile is closed, or a non-English
-            //    Chrome whose title format we can't parse). Re-launching with --profile-directory
-            //    surfaces the profile. (A bare `open --profile-directory` with no URL is a no-op
-            //    once Chrome is running, so `launch` uses `open -na`, which reliably surfaces it —
-            //    opening a new window if the profile truly has none.)
+            // 2) Couldn't pin a window to this profile by title, BUT the profile is actually
+            //    running (lsof) and its browser has windows on screen — so it DOES have a
+            //    window we just can't identify. Brave and single-profile Chrome omit the
+            //    profile from AX titles, and with several such windows open none is uniquely
+            //    attributable. Activate the existing browser instead of spawning a duplicate
+            //    window (the user wants to land on what's already open, not a fresh window).
+            if WindowFinder.hasWindows(profile.browser), BrowserActivity.isActive(profile) {
+                NSLog("[Polychrome] \(profile.id) running but window unidentifiable; activating \(profile.browser.displayName) rather than relaunching")
+                await MainActor.run { WindowFinder.activate(profile.browser) }
+                return
+            }
+            // 3) Profile is genuinely closed (no window, not active). Re-launch with
+            //    --profile-directory to surface it. (A bare `open --profile-directory` with no
+            //    URL is a no-op once the browser is running, so `launch` uses `open -na`, which
+            //    reliably surfaces it — opening a new window since the profile truly has none.)
             NSLog("[Polychrome] no identifiable window for \(profile.id); surfacing profile via relaunch")
             await MainActor.run { launch(profile: profile) }
         }
