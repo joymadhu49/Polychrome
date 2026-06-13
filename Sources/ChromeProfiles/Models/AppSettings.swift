@@ -39,6 +39,10 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(groupByBrowser, forKey: "groupByBrowser") }
     }
 
+    @Published var pinned: Bool {
+        didSet { UserDefaults.standard.set(pinned, forKey: "pinMenuOnTop") }
+    }
+
     @Published var enabledBrowsers: Set<Browser> {
         didSet {
             let raw = enabledBrowsers.map { $0.rawValue }
@@ -101,6 +105,7 @@ final class AppSettings: ObservableObject {
         self.tagsEnabled = (d.object(forKey: "tagsEnabled") as? Bool) ?? true
         self.showAXBanner = (d.object(forKey: "showAXBanner") as? Bool) ?? true
         self.groupByBrowser = (d.object(forKey: "groupByBrowser") as? Bool) ?? true
+        self.pinned = d.bool(forKey: "pinMenuOnTop")
         let themeRaw = d.string(forKey: "theme") ?? ThemeOverride.system.rawValue
         self.theme = ThemeOverride(rawValue: themeRaw) ?? .system
 

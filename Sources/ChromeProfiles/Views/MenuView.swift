@@ -14,6 +14,7 @@ struct MenuView: View {
     @State private var axTrusted: Bool = AXPermission.isTrusted()
     @State private var focusedIndex: Int = 0
     @State private var keyMonitor: Any?
+    @FocusState private var searchFocused: Bool
 
     // MARK: filtering
 
@@ -54,25 +55,19 @@ struct MenuView: View {
 
     /// The ordered, visible list — matches what the user sees top-to-bottom.
     /// Used by keyboard nav to map focusedIndex to a profile.
+    /// Open profiles always lead, across all browsers — they're the reachable ones.
     private var visibleOrdered: [ChromeProfile] {
-        if settings.groupByBrowser {
-            var out: [ChromeProfile] = []
-            for b in Browser.allCases where settings.enabledBrowsers.contains(b) {
-                let group = filteredProfiles.filter { $0.browser == b }
-                out.append(contentsOf: subgroup(group))
-            }
-            return out
+        if settings.groupByStatus && axTrusted {
+            let open = orderedByBrowser(filteredProfiles.filter { openWindowsByID[$0.id] == true })
+            let closed = filteredProfiles.filter { openWindowsByID[$0.id] != true }
+            return open + (settings.groupByBrowser ? orderedByBrowser(closed) : closed)
         }
-        return subgroup(filteredProfiles)
+        if settings.groupByBrowser { return orderedByBrowser(filteredProfiles) }
+        return filteredProfiles
     }
 
-    private func subgroup(_ list: [ChromeProfile]) -> [ChromeProfile] {
-        if settings.groupByStatus && axTrusted {
-            let open = list.filter { openWindowsByID[$0.id] == true }
-            let closed = list.filter { openWindowsByID[$0.id] != true }
-            return open + closed
-        }
-        return list
+    private func orderedByBrowser(_ list: [ChromeProfile]) -> [ChromeProfile] {
+        Browser.allCases.flatMap { b in list.filter { $0.browser == b } }
     }
 
     var body: some View {
@@ -95,18 +90,30 @@ struct MenuView: View {
             loader.reload()
             await refreshOpenWindowsAsync()
             installKeyMonitor()
+            focusSearch()
         }
         .onReceive(NotificationCenter.default.publisher(for: .polychromeMenuWillShow)) { _ in
             axTrusted = AXPermission.isTrusted()
             loader.reload()
+            query = ""            // fresh start on every open, like Spotlight
             focusedIndex = 0
             installKeyMonitor()   // reused popover may not re-run .task; ensure arrow/return nav is live
+            focusSearch()
             Task { await refreshOpenWindowsAsync() }
         }
         .onDisappear { removeKeyMonitor() }
     }
 
     // MARK: keyboard nav
+
+    /// The popover window may not be key yet when the show notification fires,
+    /// so retry shortly after — immediate assignment alone races makeKey().
+    private func focusSearch() {
+        searchFocused = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            searchFocused = true
+        }
+    }
 
     private func installKeyMonitor() {
         removeKeyMonitor()
@@ -124,6 +131,15 @@ struct MenuView: View {
                     return nil
                 }
                 return event
+            case 53: // escape — progressive: clear search, exit multi-select, then close
+                if !query.isEmpty {
+                    query = ""
+                } else if multiMode {
+                    resetMulti()
+                } else {
+                    dismiss()
+                }
+                return nil
             default:
                 return event
             }
@@ -221,6 +237,19 @@ struct MenuView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
             Spacer()
+            Button {
+                settings.pinned.toggle()
+            } label: {
+                Image(systemName: settings.pinned ? "pin.fill" : "pin")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(settings.pinned ? Color.accentColor : .secondary)
+                    .rotationEffect(.degrees(settings.pinned ? 0 : 45))
+            }
+            .buttonStyle(.plain)
+            .animation(.easeOut(duration: 0.15), value: settings.pinned)
+            .help(settings.pinned
+                  ? "Unpin — menu closes when you click away"
+                  : "Pin on top — keep the menu open above other windows")
             ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) && $0.isInstalled }), id: \.self) { b in
                 Image(systemName: b.symbolName)
                     .font(.system(size: 10, weight: .semibold))
@@ -249,6 +278,7 @@ struct MenuView: View {
             TextField(settings.quickLaunchEnabled ? "Search or paste URL" : "Search profiles", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
+                .focused($searchFocused)
                 .onChange(of: query) { _ in focusedIndex = 0 }
             if !query.isEmpty {
                 Button { query = "" } label: {
@@ -353,63 +383,65 @@ struct MenuView: View {
     // MARK: list
 
     private var profileList: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 1) {
-                if let err = loader.lastError {
-                    Text(err)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                }
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Color.clear.frame(height: 1).id("list-top")
+                    if let err = loader.lastError {
+                        Text(err)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                    }
 
-                if filteredProfiles.isEmpty {
-                    HStack {
-                        Spacer()
-                        VStack(spacing: 4) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 18))
-                                .foregroundStyle(.tertiary)
-                            Text("No profiles match")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
+                    if filteredProfiles.isEmpty {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 4) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(.tertiary)
+                                Text("No profiles match")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
                         }
-                        Spacer()
+                        .padding(.vertical, 28)
+                    } else {
+                        if settings.groupByStatus && !axTrusted {
+                            axNeededInline
+                        }
+                        listBody
                     }
-                    .padding(.vertical, 28)
-                } else {
-                    if settings.groupByStatus && !axTrusted {
-                        axNeededInline
-                    }
-                    listBody
                 }
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: 260, maxHeight: 400)
+            .onChange(of: focusedIndex) { idx in
+                let list = visibleOrdered
+                guard !list.isEmpty else { return }
+                let i = max(0, min(list.count - 1, idx))
+                proxy.scrollTo(list[i].id, anchor: nil)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .polychromeMenuWillShow)) { _ in
+                // The popover view is reused between opens, so the scroll offset
+                // would otherwise persist — always reopen at the top.
+                proxy.scrollTo("list-top", anchor: .top)
+            }
         }
-        .frame(minHeight: 260, maxHeight: 400)
     }
 
     @ViewBuilder
     private var listBody: some View {
-        if settings.groupByBrowser {
-            ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) }), id: \.self) { b in
-                let group = filteredProfiles.filter { $0.browser == b }
-                if !group.isEmpty {
-                    browserHeader(b, count: group.count)
-                    statusGroupedBody(group)
-                }
-            }
-        } else {
-            statusGroupedBody(filteredProfiles)
-        }
-    }
-
-    @ViewBuilder
-    private func statusGroupedBody(_ list: [ChromeProfile]) -> some View {
         if settings.groupByStatus && axTrusted {
-            let open = list.filter { openWindowsByID[$0.id] == true }
-            let closed = list.filter { openWindowsByID[$0.id] != true }
+            // Open profiles lead the whole list, whatever browser they belong to —
+            // burying an open Brave window under every closed Chrome profile made
+            // the most useful rows the hardest to reach.
+            let open = orderedByBrowser(filteredProfiles.filter { openWindowsByID[$0.id] == true })
+            let closed = filteredProfiles.filter { openWindowsByID[$0.id] != true }
             if !open.isEmpty {
                 sectionHeader("OPEN", count: open.count, color: .green)
                 ForEach(open) { p in row(for: p) }
@@ -419,10 +451,28 @@ struct MenuView: View {
                     Divider().opacity(0.3).padding(.horizontal, 10).padding(.vertical, 3)
                 }
                 sectionHeader("CLOSED", count: closed.count, color: .secondary)
-                ForEach(closed) { p in row(for: p) }
+                if settings.groupByBrowser {
+                    ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) }), id: \.self) { b in
+                        let group = closed.filter { $0.browser == b }
+                        if !group.isEmpty {
+                            browserHeader(b, count: group.count)
+                            ForEach(group) { p in row(for: p) }
+                        }
+                    }
+                } else {
+                    ForEach(closed) { p in row(for: p) }
+                }
+            }
+        } else if settings.groupByBrowser {
+            ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) }), id: \.self) { b in
+                let group = filteredProfiles.filter { $0.browser == b }
+                if !group.isEmpty {
+                    browserHeader(b, count: group.count)
+                    ForEach(group) { p in row(for: p) }
+                }
             }
         } else {
-            ForEach(list) { p in row(for: p) }
+            ForEach(filteredProfiles) { p in row(for: p) }
         }
     }
 
@@ -503,17 +553,17 @@ struct MenuView: View {
         .contextMenu {
             Button {
                 ChromeLauncher.launchOrFocus(profile: p)
-                dismiss()
+                dismissUnlessPinned()
             } label: { Label("Open or focus", systemImage: "arrow.up.forward.square") }
 
             Button {
                 ChromeLauncher.launch(profile: p)
-                dismiss()
+                dismissUnlessPinned()
             } label: { Label("Force new window", systemImage: "plus.rectangle.on.rectangle") }
 
             Button {
                 ChromeLauncher.launchOrFocus(profile: p, incognito: true)
-                dismiss()
+                dismissUnlessPinned()
             } label: { Label("Open incognito window", systemImage: "eyeglasses") }
 
             if settings.tagsEnabled {
@@ -533,6 +583,7 @@ struct MenuView: View {
                 } label: { Label("Tag", systemImage: "tag") }
             }
         }
+        .id(p.id)
     }
 
     private func handleTap(_ p: ChromeProfile) {
@@ -553,7 +604,7 @@ struct MenuView: View {
         } else {
             ChromeLauncher.launch(profile: p)
         }
-        dismiss()
+        dismissUnlessPinned()
     }
 
     // MARK: action bar
@@ -579,7 +630,7 @@ struct MenuView: View {
                     if let url { settings.remember(url: url) }
                     ChromeLauncher.launchMany(profiles: profilesToOpen, url: url)
                     resetMulti()
-                    dismiss()
+                    dismissUnlessPinned()
                 } label: {
                     Label(queryIsURL ? "Open URL in \(multiSelected.count)" : "Open \(multiSelected.count)",
                           systemImage: queryIsURL ? "link.badge.plus" : "square.and.arrow.up.on.square")
@@ -599,7 +650,7 @@ struct MenuView: View {
                     let url: String? = queryIsURL ? normalizedURL : nil
                     if let url { settings.remember(url: url) }
                     resetMulti()
-                    dismiss()
+                    dismissUnlessPinned()
                     Task { @MainActor in
                         await WindowTiler.launchAndTile(profiles: profilesToOpen, config: settings.layout, url: url)
                     }
@@ -677,6 +728,19 @@ struct MenuView: View {
     private func resetMulti() {
         multiSelected.removeAll()
         multiMode = false
+    }
+
+    /// Pinned menus stay open after launching — refresh the open dots
+    /// (after a beat, so the new window exists) instead of closing.
+    private func dismissUnlessPinned() {
+        if settings.pinned {
+            Task {
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                await refreshOpenWindowsAsync()
+            }
+        } else {
+            dismiss()
+        }
     }
 
     private func refreshOpenWindowsAsync() async {

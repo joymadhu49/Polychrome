@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBar: StatusBarController!
     var settingsWindow: NSWindow?
     private var browserObserver: AnyCancellable?
+    private var pinObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         statusBar = StatusBarController(rootView: AnyView(root))
+        pinObserver = settings.$pinned.sink { [weak self] in self?.statusBar.setPinned($0) }
 
         settings.applyHotkey()
         HotkeyManager.shared.onFire = { [weak self] in

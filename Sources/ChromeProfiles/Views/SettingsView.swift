@@ -31,6 +31,10 @@ struct SettingsView: View {
         }
     }
 
+    private static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String).map { "v\($0)" } ?? "dev"
+    }
+
     var body: some View {
         NavigationSplitView {
             List(Tab.allCases, selection: $selection) { tab in
@@ -40,6 +44,18 @@ struct SettingsView: View {
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 180, max: 200)
             .listStyle(.sidebar)
+            .safeAreaInset(edge: .bottom) {
+                HStack(spacing: 5) {
+                    Image(systemName: "rectangle.3.group.bubble.left.fill")
+                        .font(.system(size: 9))
+                    Text("Polychrome \(Self.appVersion)")
+                        .font(.system(size: 10))
+                    Spacer()
+                }
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            }
         } detail: {
             ScrollView {
                 Group {
@@ -76,6 +92,10 @@ struct SettingsView: View {
             }
 
             SettingsSection(title: "Menu features", description: "Toggle features in the menubar popover.") {
+                SettingsToggle(title: "Pin menu on top",
+                               subtitle: "Keep the menu open above other windows — it won't close when you click away or launch a profile. The pin in the menu's title bar toggles this too.",
+                               isOn: $settings.pinned)
+                SettingsDivider()
                 SettingsToggle(title: "Group by Open / Closed",
                                subtitle: "Show two sections: profiles with active windows, and the rest.",
                                isOn: $settings.groupByStatus)
