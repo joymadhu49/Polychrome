@@ -1,0 +1,81 @@
+name: Release (signed + notarized)
+
+# Cuts a downloadable, Gatekeeper-clean DMG. Push a version tag (e.g. v1.3.2) and
+# this builds, Developer ID-signs, notarizes, staples, and attaches the DMG to the
+# GitHub Release. Users can then open it normally — no "move to Trash".
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   DEVELOPER_ID_CERT_P12        base64 of the exported "Developer ID Application" cert (.p12)
+#   DEVELOPER_ID_CERT_PASSWORD   the password set when exporting that .p12
+#   KEYCHAIN_PASSWORD            any random string (temp keychain password for the runner)
+#   AC_API_KEY_P8                base64 of the App Store Connect API key (.p8)
+#   AC_API_KEY_ID                the API Key ID
+#   AC_API_ISSUER_ID             the API Issuer ID
+#
+# Create base64 secrets with:  base64 -i Certificates.p12 | pbcopy
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub Release and upload the DMG asset
+
+jobs:
+  release:
+    runs-on: macos-14
+    env:
+      POLYCHROME_SIGNING_IDENTITY: "Developer ID Application"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import Developer ID certificate
+        env:
+          DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          CERT="$RUNNER_TEMP/cert.p12"
+          echo "$DEVELOPER_ID_CERT_P12" | base64 --decode > "$CERT"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$DEVELOPER_ID_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          # Allow codesign to use the imported key without an interactive prompt
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Put our keychain on the search list so codesign/find-identity can see it
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          rm -f "$CERT"
+
+          echo "Installed signing identities:"
+          security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application"
+
+      - name: Build + sign app
+        run: bash scripts/build.sh
+
+      - name: Create DMG
+        run: |
+          set -euo pipefail
+          VER=""
+          [[ "$GITHUB_REF" == refs/tags/v* ]] && VER="${GITHUB_REF_NAME#v}"
+          bash scripts/make-dmg.sh "$VER"
+
+      - name: Notarize + staple
+        env:
+          AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        run: bash scripts/notarize.sh
+
+      - name: Upload DMG to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/Polychrome-*.dmg
+          fail_on_unmatched_files: true

@@ -24,3 +24,11 @@ Bundle/AppIcon.iconset/
 
 # Logs
 *.log
+
+# Signing / notarization secrets — NEVER commit these
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
