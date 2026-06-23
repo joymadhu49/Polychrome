@@ -31,6 +31,8 @@ A native macOS menubar app for managing Google Chrome profiles. Open profiles in
 3. Launch Polychrome. The icon appears in your menubar.
 4. The first time you use *Side-by-side*, macOS will prompt for Accessibility access — grant it in **System Settings → Privacy & Security → Accessibility**.
 
+Release DMGs are **signed with a Developer ID certificate and notarized by Apple**, so they open normally — no "move to Trash" prompt and no right-click workaround.
+
 ### Build from source
 
 ```bash
@@ -116,6 +118,37 @@ bash scripts/make-dmg.sh
 # → build/Polychrome-1.0.0.dmg
 ```
 
+## Releasing (signed + notarized)
+
+Releases are cut by **GitHub Actions** (`.github/workflows/release.yml`): push a version
+tag and CI builds, Developer ID-signs, notarizes, staples, and attaches the DMG to the
+GitHub Release.
+
+```bash
+# bump CFBundleShortVersionString in Bundle/Info.plist first, then:
+git tag v1.3.2
+git push origin v1.3.2
+```
+
+One-time setup — add these repository secrets (**Settings → Secrets and variables → Actions**):
+
+| Secret | What it is |
+|---|---|
+| `DEVELOPER_ID_CERT_P12` | base64 of your exported *Developer ID Application* cert (`base64 -i cert.p12 \| pbcopy`) |
+| `DEVELOPER_ID_CERT_PASSWORD` | password you set when exporting the `.p12` |
+| `KEYCHAIN_PASSWORD` | any random string (temp keychain on the runner) |
+| `AC_API_KEY_P8` | base64 of your App Store Connect API key (`.p8`) |
+| `AC_API_KEY_ID` | the API Key ID |
+| `AC_API_ISSUER_ID` | the API Issuer ID |
+
+To sign + notarize **locally** instead, see the header of `scripts/notarize.sh`:
+
+```bash
+POLYCHROME_SIGNING_IDENTITY="Developer ID Application" bash scripts/build.sh
+bash scripts/make-dmg.sh
+AC_KEYCHAIN_PROFILE=polychrome-notary bash scripts/notarize.sh
+```
+
 ## Regenerating the icon
 
 ```bash
@@ -125,10 +158,9 @@ bash scripts/make-icon.sh
 
 ## Limitations
 
-- Ad-hoc signed; first run may require **right-click → Open** to bypass Gatekeeper.
 - Profile detection requires Chrome to be installed at `/Applications/Google Chrome.app`.
 - Window-to-profile mapping relies on Chrome rendering profile names in window titles (true when multiple profiles are loaded — Chrome's default).
-- No notarization. Distribute via direct download.
+- Local dev builds use a stable self-signed identity (`scripts/setup-signing.sh`) and are **not** notarized; only the CI-built release DMGs are Developer ID-signed + notarized.
 
 ## License
 
