@@ -101,6 +101,37 @@ enum WindowFinder {
         return nil
     }
 
+    /// Every window confidently attributed to the profile — the multi-window counterpart of
+    /// `window(forProfile:)`, for actions that must reach all of them (like closing). Uses the
+    /// same two attribution cases: AX-title profile-token matches, else the lone window when
+    /// lsof confirms this profile is the active one.
+    static func windows(forProfile profile: ChromeProfile) -> [AXUIElement] {
+        var matched: [AXUIElement] = []
+        var unmatched: [AXUIElement] = []
+        for app in runningApps(for: profile.browser) {
+            for w in windows(of: app.processIdentifier) {
+                guard let title = axTitle(of: w) else { continue }
+                if titleMatches(title, profile: profile) {
+                    matched.append(w)
+                } else {
+                    unmatched.append(w)
+                }
+            }
+        }
+        if matched.isEmpty, unmatched.count == 1, BrowserActivity.isActive(profile) { return unmatched }
+        return matched
+    }
+
+    /// Close a window by pressing its AX close button — equivalent to clicking the red
+    /// traffic light, so Chrome runs its normal teardown (session save, beforeunload).
+    static func close(_ window: AXUIElement) {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return }
+        let button = raw as! AXUIElement
+        AXUIElementPerformAction(button, kAXPressAction as CFString)
+    }
+
     /// Per-browser snapshot of currently open windows.
     struct WindowScan {
         /// profile.id → a window we could attribute to it (title-token match, or the
