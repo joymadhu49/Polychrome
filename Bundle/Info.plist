@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.joymadhu.polychrome</string>
     <key>CFBundleVersion</key>
-    <string>14</string>
+    <string>15</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.3.3</string>
+    <string>1.3.4</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
