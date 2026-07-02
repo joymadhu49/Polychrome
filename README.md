@@ -1,5 +1,7 @@
 # Polychrome
 
+[![CI](https://github.com/joymadhu49/Polychrome/actions/workflows/ci.yml/badge.svg)](https://github.com/joymadhu49/Polychrome/actions/workflows/ci.yml)
+
 A native macOS menubar app for managing Google Chrome profiles. Open profiles individually, focus existing windows without spawning duplicates, and tile multiple profile windows side-by-side with one click.
 
 <p align="center">
@@ -72,15 +74,18 @@ Sources/ChromeProfiles/
 │   ├── AppDelegate.swift           Wires StatusBarController + Settings window
 │   └── StatusBarController.swift   NSStatusItem + NSPopover host
 ├── Models/
+│   ├── Browser.swift               Supported Chromium browsers (Chrome, Brave)
 │   ├── ChromeProfile.swift         dirName, name, email, avatar
 │   ├── AppSettings.swift           ObservableObject with all prefs
 │   ├── LayoutConfig.swift          Tile layout + display selection
-│   └── HotkeyConfig.swift          Carbon keyCode + modifiers + display string
+│   ├── HotkeyConfig.swift          Carbon keyCode + modifiers + display string
+│   └── ProfileTag.swift            Color tags + theme override
 ├── Services/
 │   ├── ChromeProfileLoader.swift   Parses Local State, watches via DispatchSource
 │   ├── ChromeLauncher.swift        open -na, launchOrFocus, launchMany
 │   ├── WindowFinder.swift          AX title matching → AXUIElement per profile
 │   ├── WindowTiler.swift           Geometry math + launch-and-tile orchestration
+│   ├── BrowserActivity.swift       lsof-based "which profiles are live" fallback
 │   ├── HotkeyManager.swift         Carbon RegisterEventHotKey
 │   ├── LaunchAtLogin.swift         SMAppService.mainApp
 │   ├── AXPermission.swift          AXIsProcessTrustedWithOptions
@@ -161,6 +166,12 @@ bash scripts/make-icon.sh
 - Profile detection requires Chrome to be installed at `/Applications/Google Chrome.app`.
 - Window-to-profile mapping relies on Chrome rendering profile names in window titles (true when multiple profiles are loaded — Chrome's default).
 - Local dev builds use a stable self-signed identity (`scripts/setup-signing.sh`) and are **not** notarized; only the CI-built release DMGs are Developer ID-signed + notarized.
+
+## Roadmap
+
+Improvements are tracked in [IMPROVEMENTS.md](IMPROVEMENTS.md) — a living,
+prioritized checklist of shipped fixes, known rough edges, and planned features.
+Every push and pull request is built by CI (`.github/workflows/ci.yml`).
 
 ## License
 

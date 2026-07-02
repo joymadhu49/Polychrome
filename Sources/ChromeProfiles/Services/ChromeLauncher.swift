@@ -41,7 +41,7 @@ enum ChromeLauncher {
     private static func isSafeURL(_ url: String) -> Bool {
         guard !url.hasPrefix("-") else { return false }
         guard let scheme = URL(string: url)?.scheme?.lowercased() else { return false }
-        return ["http", "https", "file", "chrome"].contains(scheme)
+        return ["http", "https", "file", "chrome", "brave"].contains(scheme)
     }
 
     /// If a window for this profile already exists, focus it.

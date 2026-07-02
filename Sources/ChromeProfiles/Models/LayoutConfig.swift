@@ -12,8 +12,8 @@ enum TileLayout: String, Codable, CaseIterable, Identifiable {
         case .row:     return "Row — 1 × N"
         case .column:  return "Column — N × 1"
         case .grid:    return "Grid — square-ish"
-        case .splitH:  return "Split horizontal (2 only)"
-        case .splitV:  return "Split vertical (2 only)"
+        case .splitH:  return "Split — left pane + stack"
+        case .splitV:  return "Split — top pane + stack"
         }
     }
 

@@ -1,0 +1,32 @@
+name: CI
+
+# Builds the app on every push and pull request so regressions surface
+# immediately instead of at release-tag time. Uses the same scripts/build.sh
+# the release pipeline runs; without a Developer ID cert it falls back to
+# ad-hoc signing, which is fine for a compile + bundle check.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build + bundle (ad-hoc signed)
+        run: bash scripts/build.sh
+
+      - name: Verify bundle layout
+        run: |
+          set -euo pipefail
+          test -x build/Polychrome.app/Contents/MacOS/Polychrome
+          test -f build/Polychrome.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+            build/Polychrome.app/Contents/Info.plist
