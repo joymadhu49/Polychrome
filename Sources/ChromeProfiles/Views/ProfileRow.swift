@@ -50,6 +50,7 @@ struct ProfileRow: View {
     let tag: ProfileTag
     let urlMode: Bool       // true when search query is URL-like
     let kbdFocused: Bool
+    var closeAction: (() -> Void)? = nil   // non-nil only for open profiles (needs AX)
     let action: () -> Void
 
     @State private var hovering = false
@@ -110,9 +111,20 @@ struct ProfileRow: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.tint)
                 } else if hovering || kbdFocused {
-                    Image(systemName: "arrow.up.forward")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 7) {
+                        if let closeAction {
+                            Button(action: closeAction) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Close this profile's window")
+                        }
+                        Image(systemName: "arrow.up.forward")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(.horizontal, 8)

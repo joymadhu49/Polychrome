@@ -551,6 +551,7 @@ struct MenuView: View {
     private func row(for p: ChromeProfile) -> some View {
         let visible = visibleOrdered
         let focused = (visible.firstIndex(of: p) == focusedIndex)
+        let canClose = axTrusted && openWindowsByID[p.id] == true
         ProfileRow(
             profile: p,
             multiSelected: multiSelected.contains(p.id),
@@ -558,7 +559,8 @@ struct MenuView: View {
             showEmail: settings.showEmails,
             tag: settings.tagsEnabled ? settings.tag(for: p) : .none,
             urlMode: queryIsURL,
-            kbdFocused: focused
+            kbdFocused: focused,
+            closeAction: canClose ? { closeWindows(of: p) } : nil
         ) {
             handleTap(p)
         }
@@ -578,6 +580,13 @@ struct MenuView: View {
                 ChromeLauncher.launchOrFocus(profile: p, incognito: true)
                 dismissUnlessPinned()
             } label: { Label("Open incognito window", systemImage: "eyeglasses") }
+
+            if axTrusted && openWindowsByID[p.id] == true {
+                Divider()
+                Button {
+                    closeWindows(of: p)
+                } label: { Label("Close window", systemImage: "xmark.circle") }
+            }
 
             if settings.tagsEnabled {
                 Divider()
@@ -618,6 +627,23 @@ struct MenuView: View {
             ChromeLauncher.launch(profile: p)
         }
         dismissUnlessPinned()
+    }
+
+    /// Close every window attributed to the profile, then re-scan so its green dot
+    /// clears. The menu stays open — closing is a management action, and the user may
+    /// want to close several profiles in a row.
+    private func closeWindows(of p: ChromeProfile) {
+        Task {
+            await Task.detached(priority: .userInitiated) {
+                // AX presses are synchronous IPC to the browser — keep them off the main thread.
+                for w in WindowFinder.windows(forProfile: p) {
+                    WindowFinder.close(w)
+                }
+            }.value
+            // Give the browser a beat to tear the window down before re-scanning.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            await refreshOpenWindowsAsync()
+        }
     }
 
     // MARK: action bar
