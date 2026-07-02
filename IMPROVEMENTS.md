@@ -31,6 +31,10 @@ item below.
   `chrome://` but rejected Brave's equivalent scheme. (v1.3.3)
 - [x] **Accurate layout names** — "Split horizontal (2 only)" claimed a 2-window
   limit that hasn't been true since the right-pane stacking landed. (v1.3.3)
+- [x] **Fix build on current Swift toolchains** — caught by the new CI on its
+  first run: `DisplayInfo` declared `Hashable` but `CGRect` members can't
+  synthesize it (now hashed manually), and `WindowFinder`'s debug-dump helpers
+  were captured across a concurrency boundary (an error under Swift 6). (v1.3.3)
 
 ## High priority
 

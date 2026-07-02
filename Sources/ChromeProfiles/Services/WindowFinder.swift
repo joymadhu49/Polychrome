@@ -196,22 +196,25 @@ enum WindowFinder {
     /// descent is capped at `maxDepth` (children-only, no AXParent walking).
     static func debugDumpAXIfEnabled(maxDepth: Int = 4) {
         guard ProcessInfo.processInfo.environment["POLYCHROME_AXDUMP"] == "1" else { return }
-        func attr(_ el: AXUIElement, _ a: String) -> String {
-            var raw: CFTypeRef?
-            AXUIElementCopyAttributeValue(el, a as CFString, &raw)
-            return (raw as? String) ?? ""
-        }
-        func children(_ el: AXUIElement) -> [AXUIElement] {
-            var raw: CFTypeRef?
-            AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw)
-            return (raw as? [AXUIElement]) ?? []
-        }
-        func walk(_ el: AXUIElement, _ depth: Int) {
-            let pad = String(repeating: "  ", count: depth)
-            NSLog("[AXDUMP]\(pad)[\(attr(el, kAXRoleAttribute as String))] rd='\(attr(el, kAXRoleDescriptionAttribute as String))' title='\(attr(el, kAXTitleAttribute as String))' desc='\(attr(el, kAXDescriptionAttribute as String))'")
-            if depth < maxDepth { for c in children(el) { walk(c, depth + 1) } }
-        }
         Task.detached(priority: .utility) {
+            // Defined inside the detached task (not captured from outside) so they don't
+            // need @Sendable — capturing local functions across a concurrency boundary
+            // is an error in Swift 6.
+            func attr(_ el: AXUIElement, _ a: String) -> String {
+                var raw: CFTypeRef?
+                AXUIElementCopyAttributeValue(el, a as CFString, &raw)
+                return (raw as? String) ?? ""
+            }
+            func children(_ el: AXUIElement) -> [AXUIElement] {
+                var raw: CFTypeRef?
+                AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw)
+                return (raw as? [AXUIElement]) ?? []
+            }
+            func walk(_ el: AXUIElement, _ depth: Int) {
+                let pad = String(repeating: "  ", count: depth)
+                NSLog("[AXDUMP]\(pad)[\(attr(el, kAXRoleAttribute as String))] rd='\(attr(el, kAXRoleDescriptionAttribute as String))' title='\(attr(el, kAXTitleAttribute as String))' desc='\(attr(el, kAXDescriptionAttribute as String))'")
+                if depth < maxDepth { for c in children(el) { walk(c, depth + 1) } }
+            }
             for b in Browser.allCases {
                 for app in NSRunningApplication.runningApplications(withBundleIdentifier: b.bundleID) {
                     for (i, w) in windows(of: app.processIdentifier).enumerated() {
