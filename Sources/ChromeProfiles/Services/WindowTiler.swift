@@ -36,9 +36,7 @@ enum WindowTiler {
         let strategy: TileLayout = {
             switch layout.layout {
             case .smart:
-                if count == 1 { return .row }
-                if count == 2 { return .splitV } // side-by-side
-                if count <= 3 { return .row }
+                if count <= 3 { return .row } // 1–3 windows: even side-by-side columns
                 return .grid
             default: return layout.layout
             }
@@ -54,17 +52,7 @@ enum WindowTiler {
         case .splitH:
             return splitHFrames(rect: baseRect, n: count, pad: pad, leftPercent: CGFloat(layout.splitPercent))
         case .splitV:
-            if count == 1 { return [baseRect.insetBy(dx: pad, dy: pad)] }
-            let n = count
-            let totalPad = pad * CGFloat(n + 1)
-            let w = (baseRect.width - totalPad) / CGFloat(n)
-            let h = baseRect.height - pad * 2
-            return (0..<n).map { i in
-                CGRect(x: baseRect.minX + pad + (w + pad) * CGFloat(i),
-                       y: baseRect.minY + pad,
-                       width: w,
-                       height: h)
-            }
+            return splitVFrames(rect: baseRect, n: count, pad: pad, topPercent: CGFloat(layout.splitPercent))
         case .smart:
             return [] // already handled
         }
@@ -93,6 +81,32 @@ enum WindowTiler {
                               y: rect.minY + pad + (cellH + pad) * CGFloat(i),
                               width: rightW,
                               height: cellH))
+        }
+        return out
+    }
+
+    /// Top/bottom counterpart of `splitHFrames` — `rect` is in AX coords (top-left origin),
+    /// so minY is the top edge. Window 0 takes the top pane sized by `topPercent`; the
+    /// remaining n-1 share the bottom pane as an even row.
+    private static func splitVFrames(rect: CGRect, n: Int, pad: CGFloat, topPercent: CGFloat) -> [CGRect] {
+        if n == 1 { return [rect.insetBy(dx: pad, dy: pad)] }
+        let usable = rect.height - pad * 3
+        let topH = usable * topPercent
+        let bottomH = usable - topH
+        let w = rect.width - pad * 2
+        let topRect = CGRect(x: rect.minX + pad, y: rect.minY + pad, width: w, height: topH)
+        let bottomY = topRect.maxY + pad
+        if n == 2 {
+            return [topRect, CGRect(x: rect.minX + pad, y: bottomY, width: w, height: bottomH)]
+        }
+        let bottomCount = n - 1
+        let cellW = (w - pad * CGFloat(bottomCount - 1)) / CGFloat(bottomCount)
+        var out: [CGRect] = [topRect]
+        for i in 0..<bottomCount {
+            out.append(CGRect(x: rect.minX + pad + (cellW + pad) * CGFloat(i),
+                              y: bottomY,
+                              width: cellW,
+                              height: bottomH))
         }
         return out
     }

@@ -7,6 +7,20 @@ struct DisplayInfo: Identifiable, Hashable {
     let frame: CGRect
     let visibleFrame: CGRect
     let isMain: Bool
+
+    // CGRect is Equatable but not Hashable, so the compiler can't synthesize
+    // Hashable — hash the rects' scalar components instead.
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(isMain)
+        for r in [frame, visibleFrame] {
+            hasher.combine(r.origin.x)
+            hasher.combine(r.origin.y)
+            hasher.combine(r.size.width)
+            hasher.combine(r.size.height)
+        }
+    }
 }
 
 enum DisplayService {
