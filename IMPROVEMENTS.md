@@ -18,6 +18,10 @@ item below.
 
 ## Shipped
 
+- [x] **Fully automatic releases** — merging to `main` with a bumped
+  `CFBundleShortVersionString` auto-builds, signs, notarizes, tags, and
+  publishes the release with the DMG. A cheap Linux pre-job skips the macOS
+  build when the version already has a tag. No manual steps remain. (v1.4.2)
 - [x] **Drag & drop links onto profiles** — drag a URL (or selected text that
   looks like one) over the menubar icon and the menu opens mid-drag; drop it on
   any profile row to open it in that profile. Rows highlight with a "Drop to
