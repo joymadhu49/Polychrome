@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct MenuView: View {
     @ObservedObject var loader: ChromeProfileLoader
@@ -15,6 +16,8 @@ struct MenuView: View {
     @State private var focusedIndex: Int = 0
     @State private var keyMonitor: Any?
     @State private var menuVisible: Bool = false
+    @State private var dropTargetID: String?       // row currently hovered by a URL drag
+    @State private var pendingDropURL: String?     // link dropped on the menubar icon, awaiting a profile click
     @FocusState private var searchFocused: Bool
 
     // MARK: filtering
@@ -76,7 +79,8 @@ struct MenuView: View {
             titleBar
             if !axTrusted && settings.showAXBanner { axBanner }
             searchBar
-            if queryIsURL { urlBanner }
+            if let pending = pendingDropURL { droppedURLBanner(pending) }
+            else if queryIsURL { urlBanner }
             urlHistoryChips
             multiToolbar
             Divider().opacity(0.4)
@@ -99,16 +103,17 @@ struct MenuView: View {
             menuVisible = true
             loader.reload()
             query = ""            // fresh start on every open, like Spotlight
+            pendingDropURL = nil
             focusedIndex = 0
             installKeyMonitor()   // reused popover may not re-run .task; ensure arrow/return nav is live
             focusSearch()
             Task { await refreshOpenWindowsAsync() }
         }
-        // A link dropped on the menubar icon (not on a row) lands in the search
-        // field as quick-launch — click any profile to open it there.
+        // A link dropped on the menubar icon (not on a row) is held pending —
+        // a banner asks which profile to open it in; the next click (or ⏎) does.
         .onReceive(NotificationCenter.default.publisher(for: .polychromeDroppedURL)) { note in
             guard let url = note.object as? String else { return }
-            query = url
+            pendingDropURL = url
             focusedIndex = 0
         }
         // Live-refresh the OPEN list while the menu is showing, so closing a window
@@ -151,8 +156,10 @@ struct MenuView: View {
                     return nil
                 }
                 return event
-            case 53: // escape — progressive: clear search, exit multi-select, then close
-                if !query.isEmpty {
+            case 53: // escape — progressive: cancel drop, clear search, exit multi-select, then close
+                if pendingDropURL != nil {
+                    pendingDropURL = nil
+                } else if !query.isEmpty {
                     query = ""
                 } else if multiMode {
                     resetMulti()
@@ -240,6 +247,36 @@ struct MenuView: View {
                     .truncationMode(.middle)
             }
             Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.10))
+    }
+
+    /// A link was dropped on the menubar icon rather than a specific row —
+    /// hold it and ask which profile should open it.
+    private func droppedURLBanner(_ url: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "link.badge.plus")
+                .font(.system(size: 14))
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Click a profile to open the dropped link")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(url)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Button { pendingDropURL = nil } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Cancel (⎋)")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -565,14 +602,22 @@ struct MenuView: View {
             isOpen: openWindowsByID[p.id] == true,
             showEmail: settings.showEmails,
             tag: settings.tagsEnabled ? settings.tag(for: p) : .none,
-            urlMode: queryIsURL,
+            urlMode: queryIsURL || pendingDropURL != nil,
             kbdFocused: focused,
-            closeAction: canClose ? { closeWindows(of: p) } : nil,
-            onDropURL: { url in handleDroppedURL(url, on: p) }
+            dropTargeted: dropTargetID == p.id,
+            closeAction: canClose ? { closeWindows(of: p) } : nil
         ) {
             handleTap(p)
         }
         .padding(.horizontal, 6)
+        // Drop target lives here, OUTSIDE ProfileRow's Button, so button
+        // hit-testing can never shadow it. Covers the full row width.
+        .onDrop(of: URLDrop.acceptedTypes, isTargeted: dropTargetBinding(for: p)) { providers in
+            URLDrop.load(providers) { url in
+                if let url { handleDroppedURL(url, on: p) }
+            }
+            return true
+        }
         .contextMenu {
             Button {
                 ChromeLauncher.launchOrFocus(profile: p)
@@ -616,15 +661,32 @@ struct MenuView: View {
         .id(p.id)
     }
 
+    private func dropTargetBinding(for p: ChromeProfile) -> Binding<Bool> {
+        Binding(
+            get: { dropTargetID == p.id },
+            set: { on in
+                if on { dropTargetID = p.id }
+                else if dropTargetID == p.id { dropTargetID = nil }
+            }
+        )
+    }
+
     /// A link was dropped onto a profile row — open it in that profile.
     /// Same path as quick-launch (URL history + launchOrFocus).
     private func handleDroppedURL(_ url: String, on p: ChromeProfile) {
+        dropTargetID = nil
+        pendingDropURL = nil
         settings.remember(url: url)
         ChromeLauncher.launchOrFocus(profile: p, url: url)
         dismissUnlessPinned()
     }
 
     private func handleTap(_ p: ChromeProfile) {
+        // A pending icon-drop takes priority: this click chooses its profile.
+        if let pending = pendingDropURL {
+            handleDroppedURL(pending, on: p)
+            return
+        }
         if multiMode {
             if let i = multiSelected.firstIndex(of: p.id) {
                 multiSelected.remove(at: i)

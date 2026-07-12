@@ -13,7 +13,7 @@ A native macOS menubar app for managing Google Chrome profiles. Open profiles in
 - **All Chrome profiles in one menubar dropdown** — auto-detected from Chrome's `Local State`. Avatars, display names, emails.
 - **Single-click launch or focus** — if a profile's window already exists, Polychrome focuses it instead of spawning a duplicate.
 - **Multi-select + side-by-side tiling** — pick N profiles, click *Side-by-side*, and Polychrome arranges their windows on your display per your chosen layout (Smart, Row, Column, Grid, Split-H, Split-V).
-- **Drag & drop a link onto a profile** — drag a URL from any app over the menubar icon (the menu opens mid-drag), then drop it on a profile row to open it in that profile. Dropping on the icon itself puts the URL in the search field — then click a profile.
+- **Drag & drop a link onto a profile** — drag a URL from any app over the menubar icon (the menu opens mid-drag), then drop it on a profile row to open it in that profile instantly. Release on the icon instead and a banner holds the link — click a profile to open it.
 - **Custom global hotkey** — record any shortcut to open the menu from anywhere.
 - **Live profile refresh** — file system watch on Chrome's `Local State` updates the list when you add/edit profiles.
 - **Configurable display target** — tile on main display or any connected screen.

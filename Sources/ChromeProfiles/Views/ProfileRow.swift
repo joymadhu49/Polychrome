@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 
 struct ProfileAvatar: View {
     let profile: ChromeProfile
@@ -51,12 +50,11 @@ struct ProfileRow: View {
     let tag: ProfileTag
     let urlMode: Bool       // true when search query is URL-like
     let kbdFocused: Bool
+    var dropTargeted: Bool = false         // a URL drag is hovering this row (drop handled by MenuView)
     var closeAction: (() -> Void)? = nil   // non-nil only for open profiles (needs AX)
-    var onDropURL: (String) -> Void = { _ in }
     let action: () -> Void
 
     @State private var hovering = false
-    @State private var dropTargeted = false
 
     var body: some View {
         Button(action: action) {
@@ -152,12 +150,6 @@ struct ProfileRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .onDrop(of: URLDrop.acceptedTypes, isTargeted: $dropTargeted) { providers in
-            URLDrop.load(providers) { url in
-                if let url { onDropURL(url) }
-            }
-            return true
-        }
         .animation(.easeOut(duration: 0.10), value: hovering)
         .animation(.easeOut(duration: 0.10), value: multiSelected)
         .animation(.easeOut(duration: 0.10), value: kbdFocused)
