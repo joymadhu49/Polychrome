@@ -1,8 +1,16 @@
 name: Release (signed + notarized)
 
-# Cuts a downloadable, Gatekeeper-clean DMG. Push a version tag (e.g. v1.3.2) and
-# this builds, Developer ID-signs, notarizes, staples, and attaches the DMG to the
-# GitHub Release. Users can then open it normally — no "move to Trash".
+# Cuts a downloadable, Gatekeeper-clean DMG — automatically.
+#
+# Triggers:
+#   • push to main — if Bundle/Info.plist's CFBundleShortVersionString has no
+#     matching v<version> tag yet, the release cuts itself: build, sign,
+#     notarize, create the tag + GitHub Release, attach the DMG. Merging a PR
+#     that bumps the version is the only human step. A push to main without a
+#     version bump releases nothing.
+#   • push of a v* tag — the classic manual flow, still supported.
+#   • workflow_dispatch — optional release_tag / target_commitish override;
+#     with no inputs it auto-detects the version like a push to main.
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   DEVELOPER_ID_CERT_P12        base64 of the exported "Developer ID Application" cert (.p12)
@@ -17,22 +25,60 @@ name: Release (signed + notarized)
 on:
   push:
     tags: ['v*']
+    branches: [main]
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag to create the GitHub Release as (e.g. v1.3.3). Leave empty to build without publishing.'
+        description: 'Tag to release as (e.g. v1.4.2). Leave empty to auto-detect from Info.plist.'
         required: false
         default: ''
       target_commitish:
-        description: 'Commit SHA (or branch) the new tag should point at. Defaults to the dispatched ref.'
+        description: 'Commit SHA (or branch) the new tag should point at. Defaults to the built commit.'
         required: false
         default: ''
 
 permissions:
-  contents: write   # create the GitHub Release and upload the DMG asset
+  contents: write   # create the tag, the GitHub Release, and upload the DMG asset
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  # Cheap gate on a Linux runner: figure out which tag (if any) this run
+  # should release, so pushes to main without a version bump skip the
+  # expensive macOS build entirely.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decide whether a release is due
+        id: ver
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          TAG=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="$GITHUB_REF_NAME"
+          elif [[ -n "${RELEASE_TAG:-}" ]]; then
+            TAG="$RELEASE_TAG"
+          else
+            VER=$(python3 -c "import plistlib; print(plistlib.load(open('Bundle/Info.plist','rb'))['CFBundleShortVersionString'])")
+            TAG="v$VER"
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "Tag $TAG already exists — nothing new to release."
+              TAG=""
+            fi
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release due: ${TAG:-no}"
+
   release:
+    needs: check
+    if: needs.check.outputs.tag != ''
     runs-on: macos-14
     env:
       POLYCHROME_SIGNING_IDENTITY: "Developer ID Application"
@@ -70,13 +116,10 @@ jobs:
 
       - name: Create DMG
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          TAG: ${{ needs.check.outputs.tag }}
         run: |
           set -euo pipefail
-          VER=""
-          [[ "$GITHUB_REF" == refs/tags/v* ]] && VER="${GITHUB_REF_NAME#v}"
-          [[ -z "$VER" && -n "${RELEASE_TAG:-}" ]] && VER="${RELEASE_TAG#v}"
-          bash scripts/make-dmg.sh "$VER"
+          bash scripts/make-dmg.sh "${TAG#v}"
 
       - name: Notarize + staple
         env:
@@ -85,15 +128,14 @@ jobs:
           AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
         run: bash scripts/notarize.sh
 
-      # Publishes on tag pushes, and also on manual dispatch when release_tag is set —
-      # the action then creates the tag itself (at target_commitish), so a release can
-      # be cut from the Actions tab without terminal access to push a tag.
-      - name: Upload DMG to the GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+      # Creates the tag (when it doesn't exist yet) and the GitHub Release, and
+      # attaches the DMG. GITHUB_TOKEN-created tags don't re-trigger workflows,
+      # so the auto flow can't recurse.
+      - name: Publish the GitHub Release with the DMG
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || github.ref_name }}
-          target_commitish: ${{ inputs.target_commitish }}
-          generate_release_notes: ${{ inputs.release_tag != '' }}
+          tag_name: ${{ needs.check.outputs.tag }}
+          target_commitish: ${{ inputs.target_commitish || github.sha }}
+          generate_release_notes: true
           files: build/Polychrome-*.dmg
           fail_on_unmatched_files: true

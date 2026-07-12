@@ -13,7 +13,7 @@ A native macOS menubar app for managing Google Chrome profiles. Open profiles in
 - **All Chrome profiles in one menubar dropdown** — auto-detected from Chrome's `Local State`. Avatars, display names, emails.
 - **Single-click launch or focus** — if a profile's window already exists, Polychrome focuses it instead of spawning a duplicate.
 - **Multi-select + side-by-side tiling** — pick N profiles, click *Side-by-side*, and Polychrome arranges their windows on your display per your chosen layout (Smart, Row, Column, Grid, Split-H, Split-V).
-- **Drag & drop a link onto a profile** — drag a URL from any app over the menubar icon (the menu opens mid-drag), then drop it on a profile row to open it in that profile.
+- **Drag & drop a link onto a profile** — drag a URL from any app over the menubar icon (the menu opens mid-drag), then drop it on a profile row to open it in that profile instantly. Release on the icon instead and a banner holds the link — click a profile to open it.
 - **Custom global hotkey** — record any shortcut to open the menu from anywhere.
 - **Live profile refresh** — file system watch on Chrome's `Local State` updates the list when you add/edit profiles.
 - **Configurable display target** — tile on main display or any connected screen.
@@ -127,15 +127,14 @@ bash scripts/make-dmg.sh
 
 ## Releasing (signed + notarized)
 
-Releases are cut by **GitHub Actions** (`.github/workflows/release.yml`): push a version
-tag and CI builds, Developer ID-signs, notarizes, staples, and attaches the DMG to the
-GitHub Release.
+Releases are **fully automatic** (`.github/workflows/release.yml`): merge a change to
+`main` that bumps `CFBundleShortVersionString` in `Bundle/Info.plist`, and CI builds,
+Developer ID-signs, notarizes, staples, creates the `v<version>` tag, and publishes the
+GitHub Release with the DMG attached. No tag pushing, no manual steps — a push to `main`
+without a version bump releases nothing.
 
-```bash
-# bump CFBundleShortVersionString in Bundle/Info.plist first, then:
-git tag v1.3.2
-git push origin v1.3.2
-```
+Manual overrides still work: push a `v*` tag, or run the workflow from the Actions tab
+(optionally with a `release_tag` input).
 
 One-time setup — add these repository secrets (**Settings → Secrets and variables → Actions**):
 

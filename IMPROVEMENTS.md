@@ -18,10 +18,20 @@ item below.
 
 ## Shipped
 
+- [x] **Fully automatic releases** — merging to `main` with a bumped
+  `CFBundleShortVersionString` auto-builds, signs, notarizes, tags, and
+  publishes the release with the DMG. A cheap Linux pre-job skips the macOS
+  build when the version already has a tag. No manual steps remain. (v1.4.2)
 - [x] **Drag & drop links onto profiles** — drag a URL (or selected text that
   looks like one) over the menubar icon and the menu opens mid-drag; drop it on
   any profile row to open it in that profile. Rows highlight with a "Drop to
   open" hint while targeted, and the URL joins the quick-launch history. (v1.4.0)
+- [x] **Drag & drop hardening** — the icon's drag-catcher is pinned with Auto
+  Layout (a bounds-sized frame could be zero before the status item laid out,
+  leaving the icon deaf to drags); row drop targets moved outside the row
+  Button so its hit-testing can never shadow them; and a drop released on the
+  icon itself shows a "click a profile to open the dropped link" banner
+  instead of filling the search field. (v1.4.2)
 - [x] **Close a profile's window from the menu** — open profiles show an ✕ on
   hover that closes their window(s) via the AX close button, so Chrome runs its
   normal teardown. (v1.3.4)
