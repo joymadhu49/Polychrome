@@ -79,8 +79,6 @@ struct MenuView: View {
             titleBar
             if !axTrusted && settings.showAXBanner { axBanner }
             searchBar
-            if let pending = pendingDropURL { droppedURLBanner(pending) }
-            else if queryIsURL { urlBanner }
             multiToolbar
             Divider().opacity(0.4)
             profileList
@@ -230,55 +228,6 @@ struct MenuView: View {
         .background(Color.orange.opacity(0.10))
     }
 
-    private var urlBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "link.circle.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Click a profile to open")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(prettyHost(normalizedURL))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.accentColor.opacity(0.10))
-    }
-
-    /// A link was dropped on the menubar icon rather than a specific row —
-    /// hold it and ask which profile should open it.
-    private func droppedURLBanner(_ url: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "link.badge.plus")
-                .font(.system(size: 14))
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Click a profile to open the dropped link")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(prettyHost(url))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Button { pendingDropURL = nil } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Cancel (⎋)")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.accentColor.opacity(0.10))
-    }
-
     // MARK: title
 
     private var titleBar: some View {
@@ -349,11 +298,6 @@ struct MenuView: View {
                 .fill(Color.primary.opacity(0.06))
         )
         .padding(.horizontal, 10)
-    }
-
-    private func prettyHost(_ url: String) -> String {
-        guard let u = URL(string: url), let host = u.host else { return url }
-        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
     private var multiToolbar: some View {
