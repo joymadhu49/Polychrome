@@ -104,6 +104,13 @@ struct MenuView: View {
             focusSearch()
             Task { await refreshOpenWindowsAsync() }
         }
+        // A link dropped on the menubar icon (not on a row) lands in the search
+        // field as quick-launch — click any profile to open it there.
+        .onReceive(NotificationCenter.default.publisher(for: .polychromeDroppedURL)) { note in
+            guard let url = note.object as? String else { return }
+            query = url
+            focusedIndex = 0
+        }
         // Live-refresh the OPEN list while the menu is showing, so closing a window
         // (or one that finishes launching) updates the dots without a manual refresh.
         // No-op while hidden — the reused popover keeps this view alive between opens.

@@ -22,6 +22,10 @@ item below.
   looks like one) over the menubar icon and the menu opens mid-drag; drop it on
   any profile row to open it in that profile. Rows highlight with a "Drop to
   open" hint while targeted, and the URL joins the quick-launch history. (v1.4.0)
+- [x] **Drag & drop hardening** — the icon's drag-catcher is pinned with Auto
+  Layout (a bounds-sized frame could be zero before the status item laid out,
+  leaving the icon deaf to drags), and dropping on the icon itself now fills
+  the search field with the URL as a forgiving fallback. (v1.4.1)
 - [x] **Close a profile's window from the menu** — open profiles show an ✕ on
   hover that closes their window(s) via the AX close button, so Chrome runs its
   normal teardown. (v1.3.4)

@@ -4,6 +4,9 @@ import SwiftUI
 
 extension Notification.Name {
     static let polychromeMenuWillShow = Notification.Name("Polychrome.menuWillShow")
+    /// Posted with a normalized URL string as `object` when a link is dropped on the
+    /// menubar icon itself — MenuView puts it in the search field (quick-launch mode).
+    static let polychromeDroppedURL = Notification.Name("Polychrome.droppedURL")
 }
 
 /// Transparent overlay on the status-item button that opens the menu when a
@@ -12,10 +15,23 @@ extension Notification.Name {
 /// events to the button underneath so normal clicking keeps working.
 private final class StatusDragCatcher: NSView {
     var onDragEntered: (() -> Void)?
+    var onDropURL: ((String) -> Void)?
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         onDragEntered?()
-        return []
+        // Accept drops on the icon itself as a fallback: the URL goes to the
+        // search field, so releasing early still works (see performDragOperation).
+        return .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pb = sender.draggingPasteboard
+        let raw = (pb.readObjects(forClasses: [NSURL.self], options: nil)?.first as? URL)?.absoluteString
+            ?? pb.string(forType: .URL)
+            ?? pb.string(forType: .string)
+        guard let raw, let url = URLDrop.normalize(raw) else { return false }
+        onDropURL?(url)
+        return true
     }
 
     override func mouseDown(with event: NSEvent) { superview?.mouseDown(with: event) }
@@ -52,16 +68,29 @@ final class StatusBarController {
             button.action = #selector(buttonClick(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
-            // Drag a link over the menubar icon and the menu opens mid-drag,
-            // so the drop can land on a profile row (rows are the drop targets).
-            let catcher = StatusDragCatcher(frame: button.bounds)
-            catcher.autoresizingMask = [.width, .height]
+            // Drag a link over the menubar icon and the menu opens mid-drag, so the
+            // drop can land on a profile row; dropping on the icon itself puts the
+            // URL in the search field instead. Pinned with Auto Layout — the button
+            // may not be laid out yet at init, so a bounds-sized frame could be zero.
+            let catcher = StatusDragCatcher()
+            catcher.translatesAutoresizingMaskIntoConstraints = false
             catcher.registerForDraggedTypes(URLDrop.pasteboardTypes)
             catcher.onDragEntered = { [weak self] in
                 guard let self, !self.popover.isShown else { return }
                 self.show()
             }
+            catcher.onDropURL = { [weak self] url in
+                guard let self else { return }
+                if !self.popover.isShown { self.show() }
+                NotificationCenter.default.post(name: .polychromeDroppedURL, object: url)
+            }
             button.addSubview(catcher)
+            NSLayoutConstraint.activate([
+                catcher.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+                catcher.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+                catcher.topAnchor.constraint(equalTo: button.topAnchor),
+                catcher.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+            ])
         }
 
         // Dismiss on click-outside (popover.behavior = .transient handles this for most apps, redundancy safe).
