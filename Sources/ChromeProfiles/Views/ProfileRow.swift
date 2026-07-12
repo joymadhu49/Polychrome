@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ProfileAvatar: View {
     let profile: ChromeProfile
@@ -51,9 +52,11 @@ struct ProfileRow: View {
     let urlMode: Bool       // true when search query is URL-like
     let kbdFocused: Bool
     var closeAction: (() -> Void)? = nil   // non-nil only for open profiles (needs AX)
+    var onDropURL: (String) -> Void = { _ in }
     let action: () -> Void
 
     @State private var hovering = false
+    @State private var dropTargeted = false
 
     var body: some View {
         Button(action: action) {
@@ -89,6 +92,11 @@ struct ProfileRow: View {
                                 .frame(width: 6, height: 6)
                                 .shadow(color: .green.opacity(0.6), radius: 2)
                                 .help("Window open")
+                        }
+                        if dropTargeted {
+                            Text("Drop to open")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.tint)
                         }
                     }
                     if showEmail, let email = profile.email, !email.isEmpty {
@@ -136,18 +144,28 @@ struct ProfileRow: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(kbdFocused ? Color.accentColor.opacity(0.55) : .clear, lineWidth: 1.5)
+                    .stroke(dropTargeted ? Color.accentColor
+                            : (kbdFocused ? Color.accentColor.opacity(0.55) : .clear),
+                            lineWidth: 1.5)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .onDrop(of: URLDrop.acceptedTypes, isTargeted: $dropTargeted) { providers in
+            URLDrop.load(providers) { url in
+                if let url { onDropURL(url) }
+            }
+            return true
+        }
         .animation(.easeOut(duration: 0.10), value: hovering)
         .animation(.easeOut(duration: 0.10), value: multiSelected)
         .animation(.easeOut(duration: 0.10), value: kbdFocused)
+        .animation(.easeOut(duration: 0.10), value: dropTargeted)
     }
 
     private var rowBackground: Color {
+        if dropTargeted { return Color.accentColor.opacity(0.22) }
         if multiSelected { return Color.accentColor.opacity(0.18) }
         if kbdFocused { return Color.accentColor.opacity(0.10) }
         if hovering { return Color.primary.opacity(0.08) }

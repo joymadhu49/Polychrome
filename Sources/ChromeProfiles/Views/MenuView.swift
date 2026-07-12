@@ -560,7 +560,8 @@ struct MenuView: View {
             tag: settings.tagsEnabled ? settings.tag(for: p) : .none,
             urlMode: queryIsURL,
             kbdFocused: focused,
-            closeAction: canClose ? { closeWindows(of: p) } : nil
+            closeAction: canClose ? { closeWindows(of: p) } : nil,
+            onDropURL: { url in handleDroppedURL(url, on: p) }
         ) {
             handleTap(p)
         }
@@ -606,6 +607,14 @@ struct MenuView: View {
             }
         }
         .id(p.id)
+    }
+
+    /// A link was dropped onto a profile row — open it in that profile.
+    /// Same path as quick-launch (URL history + launchOrFocus).
+    private func handleDroppedURL(_ url: String, on p: ChromeProfile) {
+        settings.remember(url: url)
+        ChromeLauncher.launchOrFocus(profile: p, url: url)
+        dismissUnlessPinned()
     }
 
     private func handleTap(_ p: ChromeProfile) {

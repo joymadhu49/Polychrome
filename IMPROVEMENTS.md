@@ -18,6 +18,16 @@ item below.
 
 ## Shipped
 
+- [x] **Drag & drop links onto profiles** — drag a URL (or selected text that
+  looks like one) over the menubar icon and the menu opens mid-drag; drop it on
+  any profile row to open it in that profile. Rows highlight with a "Drop to
+  open" hint while targeted, and the URL joins the quick-launch history. (v1.4.0)
+- [x] **Close a profile's window from the menu** — open profiles show an ✕ on
+  hover that closes their window(s) via the AX close button, so Chrome runs its
+  normal teardown. (v1.3.4)
+- [x] **Cut releases from the Actions tab** — `release.yml` accepts a manual
+  dispatch with `release_tag`/`target_commitish`, so a signed + notarized
+  release can be published without terminal access to push a tag. (v1.3.4)
 - [x] **CI build on every push/PR** — previously nothing compiled the code until a
   release tag was pushed, so a broken commit could sit on `main` unnoticed.
   (v1.3.3)

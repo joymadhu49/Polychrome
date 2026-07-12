@@ -6,6 +6,24 @@ extension Notification.Name {
     static let polychromeMenuWillShow = Notification.Name("Polychrome.menuWillShow")
 }
 
+/// Transparent overlay on the status-item button that opens the menu when a
+/// URL/text drag hovers over the icon, so the drag can continue onto a profile
+/// row. It never accepts the drop itself (rows do), and it forwards mouse
+/// events to the button underneath so normal clicking keeps working.
+private final class StatusDragCatcher: NSView {
+    var onDragEntered: (() -> Void)?
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        onDragEntered?()
+        return []
+    }
+
+    override func mouseDown(with event: NSEvent) { superview?.mouseDown(with: event) }
+    override func mouseUp(with event: NSEvent) { superview?.mouseUp(with: event) }
+    override func rightMouseDown(with event: NSEvent) { superview?.rightMouseDown(with: event) }
+    override func rightMouseUp(with event: NSEvent) { superview?.rightMouseUp(with: event) }
+}
+
 @MainActor
 final class StatusBarController {
     private let statusItem: NSStatusItem
@@ -33,6 +51,17 @@ final class StatusBarController {
             button.target = self
             button.action = #selector(buttonClick(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+            // Drag a link over the menubar icon and the menu opens mid-drag,
+            // so the drop can land on a profile row (rows are the drop targets).
+            let catcher = StatusDragCatcher(frame: button.bounds)
+            catcher.autoresizingMask = [.width, .height]
+            catcher.registerForDraggedTypes(URLDrop.pasteboardTypes)
+            catcher.onDragEntered = { [weak self] in
+                guard let self, !self.popover.isShown else { return }
+                self.show()
+            }
+            button.addSubview(catcher)
         }
 
         // Dismiss on click-outside (popover.behavior = .transient handles this for most apps, redundancy safe).
