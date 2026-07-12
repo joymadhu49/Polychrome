@@ -19,29 +19,31 @@ item below.
 ## Shipped
 
 - [x] **Styled DMG installer** — the install window now has a designed
-  backdrop (dark gradient, rounded-box icon wells, drag arrow), positioned
-  icons, a volume icon, and a hidden app extension, built with create-dmg and
-  a dependency-free generated background (scripts/make-dmg-background.py);
-  plain hdiutil remains as fallback so releases can't break. (v1.4.4)
+  backdrop with one native San Francisco type system, icon-and-label cards,
+  a Polychrome gradient drag arrow, positioned icons, a volume icon, and a
+  hidden app extension. The Retina asset is generated with AppKit
+  (scripts/make-dmg-background.swift); plain hdiutil remains as fallback so
+  releases can't break. (v1.4.4, refined post-v1.4.4)
 - [x] **Cleaner, more professional menu** — removed the URL-history chips from
-  under the search field (history lives in Settings only), removed the URL
-  banners entirely (no link text is ever shown in the menu), and a drag
+  under the search field, removed URL entry/history entirely, and a drag
   hovering a profile row shows a clear accent "Open here" badge with a
-  stronger highlight. (v1.4.4)
+  stronger highlight. Links now open only through direct profile-row drops and
+  are neither displayed nor retained. (post-v1.4.4)
 - [x] **Fully automatic releases** — merging to `main` with a bumped
   `CFBundleShortVersionString` auto-builds, signs, notarizes, tags, and
   publishes the release with the DMG. A cheap Linux pre-job skips the macOS
   build when the version already has a tag. No manual steps remain. (v1.4.2)
 - [x] **Drag & drop links onto profiles** — drag a URL (or selected text that
   looks like one) over the menubar icon and the menu opens mid-drag; drop it on
-  any profile row to open it in that profile. Rows highlight with a "Drop to
-  open" hint while targeted, and the URL joins the quick-launch history. (v1.4.0)
+  any profile row to open it in that profile. Rows highlight with an "Open
+  here" hint while targeted. (v1.4.0, simplified post-v1.4.4)
 - [x] **Drag & drop hardening** — the icon's drag-catcher is pinned with Auto
   Layout (a bounds-sized frame could be zero before the status item laid out,
   leaving the icon deaf to drags); row drop targets moved outside the row
   Button so its hit-testing can never shadow them; and a drop released on the
-  icon itself shows a "click a profile to open the dropped link" banner
-  instead of filling the search field. (v1.4.2)
+  icon itself originally held the URL for a later profile selection; that
+  fallback was removed when direct row drops became the only URL path. (v1.4.2,
+  simplified post-v1.4.4)
 - [x] **Close a profile's window from the menu** — open profiles show an ✕ on
   hover that closes their window(s) via the AX close button, so Chrome runs its
   normal teardown. (v1.3.4)

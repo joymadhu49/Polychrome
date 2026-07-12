@@ -48,7 +48,6 @@ struct ProfileRow: View {
     let isOpen: Bool
     let showEmail: Bool
     let tag: ProfileTag
-    let urlMode: Bool       // true when search query is URL-like
     let kbdFocused: Bool
     var dropTargeted: Bool = false         // a URL drag is hovering this row (drop handled by MenuView)
     var closeAction: (() -> Void)? = nil   // non-nil only for open profiles (needs AX)
@@ -117,10 +116,6 @@ struct ProfileRow: View {
                 } else if multiSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 13))
-                        .foregroundStyle(.tint)
-                } else if urlMode {
-                    Image(systemName: "arrow.up.right.square.fill")
-                        .font(.system(size: 12))
                         .foregroundStyle(.tint)
                 } else if hovering || kbdFocused {
                     HStack(spacing: 7) {

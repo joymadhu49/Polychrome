@@ -23,10 +23,6 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(groupByStatus, forKey: "groupByStatus") }
     }
 
-    @Published var quickLaunchEnabled: Bool {
-        didSet { UserDefaults.standard.set(quickLaunchEnabled, forKey: "quickLaunchEnabled") }
-    }
-
     @Published var tagsEnabled: Bool {
         didSet { UserDefaults.standard.set(tagsEnabled, forKey: "tagsEnabled") }
     }
@@ -49,25 +45,6 @@ final class AppSettings: ObservableObject {
             UserDefaults.standard.set(raw, forKey: "enabledBrowsers")
         }
     }
-
-    @Published var urlHistory: [String] {
-        didSet {
-            UserDefaults.standard.set(urlHistory, forKey: "urlHistory")
-        }
-    }
-
-    static let urlHistoryLimit = 5
-
-    func remember(url: String) {
-        let u = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !u.isEmpty else { return }
-        var list = urlHistory.filter { $0 != u }
-        list.insert(u, at: 0)
-        if list.count > Self.urlHistoryLimit { list = Array(list.prefix(Self.urlHistoryLimit)) }
-        urlHistory = list
-    }
-
-    func clearURLHistory() { urlHistory = [] }
 
     @Published var theme: ThemeOverride {
         didSet {
@@ -97,11 +74,14 @@ final class AppSettings: ObservableObject {
 
     init() {
         let d = UserDefaults.standard
+        // URL quick-launch/history were removed in favor of direct row drops.
+        // Clear any previously retained URLs during migration.
+        d.removeObject(forKey: "quickLaunchEnabled")
+        d.removeObject(forKey: "urlHistory")
         self.launchAtLogin = d.bool(forKey: "launchAtLogin")
         self.showEmails = (d.object(forKey: "showEmails") as? Bool) ?? true
         self.focusExisting = (d.object(forKey: "focusExisting") as? Bool) ?? true
         self.groupByStatus = (d.object(forKey: "groupByStatus") as? Bool) ?? true
-        self.quickLaunchEnabled = (d.object(forKey: "quickLaunchEnabled") as? Bool) ?? true
         self.tagsEnabled = (d.object(forKey: "tagsEnabled") as? Bool) ?? true
         self.showAXBanner = (d.object(forKey: "showAXBanner") as? Bool) ?? true
         self.groupByBrowser = (d.object(forKey: "groupByBrowser") as? Bool) ?? true
@@ -116,9 +96,6 @@ final class AppSettings: ObservableObject {
             let installed = Browser.allCases.filter { $0.isInstalled }
             self.enabledBrowsers = installed.isEmpty ? Set([.chrome]) : Set(installed)
         }
-
-        // URL history
-        self.urlHistory = d.stringArray(forKey: "urlHistory") ?? []
 
         // Tag map — with one-time migration from legacy bare-dir keys to "chrome:Dir" composite keys.
         if let data = d.data(forKey: "tagByDir"),

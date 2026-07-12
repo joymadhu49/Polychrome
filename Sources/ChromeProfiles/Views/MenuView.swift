@@ -17,29 +17,11 @@ struct MenuView: View {
     @State private var keyMonitor: Any?
     @State private var menuVisible: Bool = false
     @State private var dropTargetID: String?       // row currently hovered by a URL drag
-    @State private var pendingDropURL: String?     // link dropped on the menubar icon, awaiting a profile click
     @FocusState private var searchFocused: Bool
 
     // MARK: filtering
 
-    private var queryIsURL: Bool {
-        guard settings.quickLaunchEnabled else { return false }
-        let q = query.trimmingCharacters(in: .whitespaces)
-        if q.isEmpty { return false }
-        if q.hasPrefix("-") { return false }   // never treat a switch-like token as a URL
-        if q.hasPrefix("http://") || q.hasPrefix("https://") { return true }
-        if q.contains(".") && !q.contains(" ") && q.count >= 4 { return true }
-        return false
-    }
-
-    private var normalizedURL: String {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        if q.hasPrefix("http://") || q.hasPrefix("https://") { return q }
-        return "https://" + q
-    }
-
     private var filteredProfiles: [ChromeProfile] {
-        if queryIsURL { return loader.profiles }
         guard !query.isEmpty else { return loader.profiles }
         let q = query.lowercased()
         return loader.profiles.filter {
@@ -100,18 +82,10 @@ struct MenuView: View {
             menuVisible = true
             loader.reload()
             query = ""            // fresh start on every open, like Spotlight
-            pendingDropURL = nil
             focusedIndex = 0
             installKeyMonitor()   // reused popover may not re-run .task; ensure arrow/return nav is live
             focusSearch()
             Task { await refreshOpenWindowsAsync() }
-        }
-        // A link dropped on the menubar icon (not on a row) is held pending —
-        // a banner asks which profile to open it in; the next click (or ⏎) does.
-        .onReceive(NotificationCenter.default.publisher(for: .polychromeDroppedURL)) { note in
-            guard let url = note.object as? String else { return }
-            pendingDropURL = url
-            focusedIndex = 0
         }
         // Live-refresh the OPEN list while the menu is showing, so closing a window
         // (or one that finishes launching) updates the dots without a manual refresh.
@@ -153,10 +127,8 @@ struct MenuView: View {
                     return nil
                 }
                 return event
-            case 53: // escape — progressive: cancel drop, clear search, exit multi-select, then close
-                if pendingDropURL != nil {
-                    pendingDropURL = nil
-                } else if !query.isEmpty {
+            case 53: // escape — progressive: clear search, exit multi-select, then close
+                if !query.isEmpty {
                     query = ""
                 } else if multiMode {
                     resetMulti()
@@ -274,10 +246,10 @@ struct MenuView: View {
 
     private var searchBar: some View {
         HStack(spacing: 6) {
-            Image(systemName: queryIsURL ? "link" : "magnifyingglass")
+            Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(queryIsURL ? Color.accentColor : .secondary)
-            TextField(settings.quickLaunchEnabled ? "Search or paste URL" : "Search profiles", text: $query)
+                .foregroundStyle(.secondary)
+            TextField("Search profiles", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($searchFocused)
@@ -508,7 +480,6 @@ struct MenuView: View {
             isOpen: openWindowsByID[p.id] == true,
             showEmail: settings.showEmails,
             tag: settings.tagsEnabled ? settings.tag(for: p) : .none,
-            urlMode: queryIsURL || pendingDropURL != nil,
             kbdFocused: focused,
             dropTargeted: dropTargetID == p.id,
             closeAction: canClose ? { closeWindows(of: p) } : nil
@@ -577,22 +548,14 @@ struct MenuView: View {
         )
     }
 
-    /// A link was dropped onto a profile row — open it in that profile.
-    /// Same path as quick-launch (URL history + launchOrFocus).
+    /// A link dropped onto a profile row opens immediately in that profile.
     private func handleDroppedURL(_ url: String, on p: ChromeProfile) {
         dropTargetID = nil
-        pendingDropURL = nil
-        settings.remember(url: url)
         ChromeLauncher.launchOrFocus(profile: p, url: url)
         dismissUnlessPinned()
     }
 
     private func handleTap(_ p: ChromeProfile) {
-        // A pending icon-drop takes priority: this click chooses its profile.
-        if let pending = pendingDropURL {
-            handleDroppedURL(pending, on: p)
-            return
-        }
         if multiMode {
             if let i = multiSelected.firstIndex(of: p.id) {
                 multiSelected.remove(at: i)
@@ -601,11 +564,7 @@ struct MenuView: View {
             }
             return
         }
-        if queryIsURL {
-            let url = normalizedURL
-            settings.remember(url: url)
-            ChromeLauncher.launchOrFocus(profile: p, url: url)
-        } else if settings.focusExisting {
+        if settings.focusExisting {
             ChromeLauncher.launchOrFocus(profile: p)
         } else {
             ChromeLauncher.launch(profile: p)
@@ -634,29 +593,15 @@ struct MenuView: View {
 
     private var multiActionBar: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if queryIsURL {
-                HStack(spacing: 5) {
-                    Image(systemName: "link")
-                        .font(.system(size: 9, weight: .bold))
-                    Text("URL will open in each selected profile")
-                        .font(.system(size: 10, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .foregroundStyle(.tint)
-            }
             HStack(spacing: 8) {
                 Button {
                     let ids = multiSelected
                     let profilesToOpen = loader.profiles.filter { ids.contains($0.id) }
-                    let url: String? = queryIsURL ? normalizedURL : nil
-                    if let url { settings.remember(url: url) }
-                    ChromeLauncher.launchMany(profiles: profilesToOpen, url: url)
+                    ChromeLauncher.launchMany(profiles: profilesToOpen)
                     resetMulti()
                     dismissUnlessPinned()
                 } label: {
-                    Label(queryIsURL ? "Open URL in \(multiSelected.count)" : "Open \(multiSelected.count)",
-                          systemImage: queryIsURL ? "link.badge.plus" : "square.and.arrow.up.on.square")
+                    Label("Open \(multiSelected.count)", systemImage: "square.and.arrow.up.on.square")
                         .font(.system(size: 12, weight: .medium))
                 }
                 .disabled(multiSelected.isEmpty)
@@ -670,12 +615,10 @@ struct MenuView: View {
                     }
                     let ids = multiSelected
                     let profilesToOpen = loader.profiles.filter { ids.contains($0.id) }
-                    let url: String? = queryIsURL ? normalizedURL : nil
-                    if let url { settings.remember(url: url) }
                     resetMulti()
                     dismissUnlessPinned()
                     Task { @MainActor in
-                        await WindowTiler.launchAndTile(profiles: profilesToOpen, config: settings.layout, url: url)
+                        await WindowTiler.launchAndTile(profiles: profilesToOpen, config: settings.layout)
                     }
                 } label: {
                     Label("Side-by-side", systemImage: settings.layout.layout.icon)

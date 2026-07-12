@@ -18,8 +18,8 @@ echo "==> creating $DMG"
 
 # Preferred: a styled installer window (background art, positioned icons,
 # volume icon) via create-dmg — `brew install create-dmg`. The layout matches
-# Bundle/dmg-background.png (regenerate with scripts/make-dmg-background.py):
-# 600x420 pt window, app icon at (150,190), Applications at (450,190).
+# Bundle/dmg-background.png (regenerate with scripts/make-dmg-background.swift):
+# 600x420 pt window, app icon at (150,210), Applications at (450,210).
 styled_dmg() {
     command -v create-dmg >/dev/null 2>&1 || return 1
     local stage
@@ -31,10 +31,10 @@ styled_dmg() {
         --background "Bundle/dmg-background.png"
         --window-pos 200 120
         --window-size 600 420
-        --icon-size 128
-        --text-size 12
-        --icon "${APP_NAME}.app" 150 190
-        --app-drop-link 450 190
+        --icon-size 112
+        --text-size 13
+        --icon "${APP_NAME}.app" 150 210
+        --app-drop-link 450 210
         --hide-extension "${APP_NAME}.app"
         --no-internet-enable
     )

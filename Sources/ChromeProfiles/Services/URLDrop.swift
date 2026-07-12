@@ -33,8 +33,8 @@ enum URLDrop {
         finish(nil)
     }
 
-    /// Mirror of the search-field quick-launch rules: never a switch-like token,
-    /// known schemes pass through, bare domains get https:// prepended.
+    /// Never accept a switch-like token. Known schemes pass through and bare
+    /// domains get https:// prepended before they reach the browser launcher.
     static func normalize(_ raw: String) -> String? {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty, !s.hasPrefix("-"), !s.contains(" ") else { return nil }

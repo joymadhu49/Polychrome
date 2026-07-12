@@ -104,10 +104,6 @@ struct SettingsView: View {
                                subtitle: "Split the profile list into Chrome and Brave sections.",
                                isOn: $settings.groupByBrowser)
                 SettingsDivider()
-                SettingsToggle(title: "Quick-launch URL",
-                               subtitle: "Paste or type a URL in the search field, then click any profile to open it there.",
-                               isOn: $settings.quickLaunchEnabled)
-                SettingsDivider()
                 SettingsToggle(title: "Profile tags",
                                subtitle: "Right-click any profile to assign a color tag (Work, Personal, Test, etc.). Tags appear as a colored dot on the avatar.",
                                isOn: $settings.tagsEnabled)
@@ -125,31 +121,6 @@ struct SettingsView: View {
                 }
             }
 
-            SettingsSection(title: "Recently opened URLs",
-                            description: "Quick-launch history. Kept here only — the menu stays clean.") {
-                if settings.urlHistory.isEmpty {
-                    Text("No URLs yet — paste one in the menu search to start the history.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(settings.urlHistory, id: \.self) { u in
-                            HStack {
-                                Image(systemName: "link")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                                Text(u)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Spacer()
-                            }
-                        }
-                    }
-                    Button("Clear history") { settings.clearURLHistory() }
-                        .controlSize(.small)
-                }
-            }
         }
     }
 

@@ -53,7 +53,8 @@ enum ChromeLauncher {
             return
         }
         if let url, !url.isEmpty {
-            NSLog("[Polychrome] open URL in \(profile.id): \(url)")
+            // URLs can contain sensitive query strings or tokens; never write them to logs.
+            NSLog("[Polychrome] open dropped URL in \(profile.id)")
             launch(profile: profile, url: url)
             return
         }
