@@ -18,6 +18,10 @@ item below.
 
 ## Shipped
 
+- [x] **Cleaner, more professional menu** — removed the URL-history chips from
+  under the search field (history lives in Settings only), banners show a tidy
+  host name instead of a raw URL, and a drag hovering a profile row shows a
+  clear accent "Open here" badge with a stronger highlight. (v1.4.3)
 - [x] **Fully automatic releases** — merging to `main` with a bumped
   `CFBundleShortVersionString` auto-builds, signs, notarizes, tags, and
   publishes the release with the DMG. A cheap Linux pre-job skips the macOS
