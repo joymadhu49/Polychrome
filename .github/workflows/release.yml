@@ -114,6 +114,9 @@ jobs:
       - name: Build + sign app
         run: bash scripts/build.sh
 
+      - name: Install create-dmg (styled installer window)
+        run: brew install create-dmg
+
       - name: Create DMG
         env:
           TAG: ${{ needs.check.outputs.tag }}

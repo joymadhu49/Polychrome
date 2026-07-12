@@ -18,6 +18,16 @@ item below.
 
 ## Shipped
 
+- [x] **Styled DMG installer** — the install window now has a designed
+  backdrop (dark gradient, rounded-box icon wells, drag arrow), positioned
+  icons, a volume icon, and a hidden app extension, built with create-dmg and
+  a dependency-free generated background (scripts/make-dmg-background.py);
+  plain hdiutil remains as fallback so releases can't break. (v1.4.4)
+- [x] **Cleaner, more professional menu** — removed the URL-history chips from
+  under the search field (history lives in Settings only), removed the URL
+  banners entirely (no link text is ever shown in the menu), and a drag
+  hovering a profile row shows a clear accent "Open here" badge with a
+  stronger highlight. (v1.4.4)
 - [x] **Fully automatic releases** — merging to `main` with a bumped
   `CFBundleShortVersionString` auto-builds, signs, notarizes, tags, and
   publishes the release with the DMG. A cheap Linux pre-job skips the macOS

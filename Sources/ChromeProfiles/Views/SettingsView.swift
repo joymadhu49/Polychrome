@@ -126,7 +126,7 @@ struct SettingsView: View {
             }
 
             SettingsSection(title: "Recently opened URLs",
-                            description: "Quick-launch history shown as chips under the search box.") {
+                            description: "Quick-launch history. Kept here only — the menu stays clean.") {
                 if settings.urlHistory.isEmpty {
                     Text("No URLs yet — paste one in the menu search to start the history.")
                         .font(.system(size: 11))

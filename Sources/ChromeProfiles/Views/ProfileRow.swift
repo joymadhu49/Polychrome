@@ -91,11 +91,6 @@ struct ProfileRow: View {
                                 .shadow(color: .green.opacity(0.6), radius: 2)
                                 .help("Window open")
                         }
-                        if dropTargeted {
-                            Text("Drop to open")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.tint)
-                        }
                     }
                     if showEmail, let email = profile.email, !email.isEmpty {
                         Text(email)
@@ -108,7 +103,18 @@ struct ProfileRow: View {
 
                 Spacer(minLength: 4)
 
-                if multiSelected {
+                if dropTargeted {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("Open here")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor))
+                } else if multiSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(.tint)
@@ -157,7 +163,7 @@ struct ProfileRow: View {
     }
 
     private var rowBackground: Color {
-        if dropTargeted { return Color.accentColor.opacity(0.22) }
+        if dropTargeted { return Color.accentColor.opacity(0.28) }
         if multiSelected { return Color.accentColor.opacity(0.18) }
         if kbdFocused { return Color.accentColor.opacity(0.10) }
         if hovering { return Color.primary.opacity(0.08) }

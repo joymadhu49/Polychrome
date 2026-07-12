@@ -79,9 +79,6 @@ struct MenuView: View {
             titleBar
             if !axTrusted && settings.showAXBanner { axBanner }
             searchBar
-            if let pending = pendingDropURL { droppedURLBanner(pending) }
-            else if queryIsURL { urlBanner }
-            urlHistoryChips
             multiToolbar
             Divider().opacity(0.4)
             profileList
@@ -231,58 +228,6 @@ struct MenuView: View {
         .background(Color.orange.opacity(0.10))
     }
 
-    private var urlBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "link.circle.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Open URL in profile")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text(normalizedURL)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.accentColor.opacity(0.10))
-    }
-
-    /// A link was dropped on the menubar icon rather than a specific row —
-    /// hold it and ask which profile should open it.
-    private func droppedURLBanner(_ url: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "link.badge.plus")
-                .font(.system(size: 14))
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Click a profile to open the dropped link")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(url)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer()
-            Button { pendingDropURL = nil } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Cancel (⎋)")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.accentColor.opacity(0.10))
-    }
-
     // MARK: title
 
     private var titleBar: some View {
@@ -353,45 +298,6 @@ struct MenuView: View {
                 .fill(Color.primary.opacity(0.06))
         )
         .padding(.horizontal, 10)
-    }
-
-    // MARK: URL history chips
-
-    @ViewBuilder
-    private var urlHistoryChips: some View {
-        let showChips = settings.quickLaunchEnabled
-            && query.isEmpty
-            && !settings.urlHistory.isEmpty
-        if showChips {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(settings.urlHistory, id: \.self) { u in
-                        Button { query = u } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "link")
-                                    .font(.system(size: 9, weight: .semibold))
-                                Text(prettyHost(u))
-                                    .font(.system(size: 10, weight: .medium))
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.primary.opacity(0.07)))
-                            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
-                        }
-                        .buttonStyle(.plain)
-                        .help(u)
-                    }
-                }
-                .padding(.horizontal, 10)
-            }
-            .padding(.top, 6)
-        }
-    }
-
-    private func prettyHost(_ url: String) -> String {
-        guard let u = URL(string: url), let host = u.host else { return url }
-        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
     private var multiToolbar: some View {
