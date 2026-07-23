@@ -50,6 +50,8 @@ struct ProfileRow: View {
     let tag: ProfileTag
     let kbdFocused: Bool
     var dropTargeted: Bool = false         // a URL drag is hovering this row (drop handled by MenuView)
+    var windowCount: Int = 0               // open windows attributed to this profile (0 = none/unknown)
+    var windowAction: ((Int) -> Void)? = nil  // click on window box i (0-based) → focus that window
     var closeAction: (() -> Void)? = nil   // non-nil only for open profiles (needs AX)
     let action: () -> Void
 
@@ -89,6 +91,19 @@ struct ProfileRow: View {
                                 .frame(width: 6, height: 6)
                                 .shadow(color: .green.opacity(0.6), radius: 2)
                                 .help("Window open")
+                        }
+                        if windowCount > 0, let windowAction {
+                            HStack(spacing: 4) {
+                                ForEach(0..<min(windowCount, 5), id: \.self) { i in
+                                    WindowBox(index: i + 1) { windowAction(i) }
+                                }
+                                if windowCount > 5 {
+                                    Text("…")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(.tertiary)
+                                        .help("\(windowCount) windows open in total")
+                                }
+                            }
                         }
                     }
                     if showEmail, let email = profile.email, !email.isEmpty {
@@ -163,5 +178,40 @@ struct ProfileRow: View {
         if kbdFocused { return Color.accentColor.opacity(0.10) }
         if hovering { return Color.primary.opacity(0.08) }
         return .clear
+    }
+}
+
+/// A small clickable window glyph on an open profile row — one per browser window.
+/// Drawn as a miniature window (title-bar strip + body), no number shown; clicking
+/// it raises exactly that window (a real window, not a tab).
+struct WindowBox: View {
+    let index: Int
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .top) {
+                // window body
+                (hovering ? Color.accentColor.opacity(0.30) : Color.primary.opacity(0.08))
+                // mini title bar
+                Rectangle()
+                    .fill(hovering ? Color.accentColor : Color.primary.opacity(0.30))
+                    .frame(height: 4.5)
+            }
+            .frame(width: 21, height: 16)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(hovering ? Color.accentColor : Color.primary.opacity(0.28), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(hovering ? 1.12 : 1.0)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.10), value: hovering)
+        .help("Window \(index) — click to switch")
     }
 }

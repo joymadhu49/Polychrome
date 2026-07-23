@@ -70,6 +70,25 @@ enum WindowFinder {
         return tok.given == profile.displayName
     }
 
+    /// The AX title with the browser's trailing marker removed, for display in menus:
+    ///   "GitHub - Google Chrome - Joy (JOY_M)" → "GitHub"
+    ///   "GitHub - Brave"                       → "GitHub"
+    /// Falls back to the raw title when no marker is present.
+    static func pageTitle(from title: String, appLabel: String) -> String {
+        for sep in [" - ", " — ", " – "] {
+            if let r = title.range(of: "\(sep)\(appLabel)\(sep)", options: .backwards) {
+                let page = String(title[..<r.lowerBound])
+                if !page.isEmpty { return page }
+            }
+            let suffix = "\(sep)\(appLabel)"
+            if title.hasSuffix(suffix) {
+                let page = String(title.dropLast(suffix.count))
+                if !page.isEmpty { return page }
+            }
+        }
+        return title
+    }
+
     static func pid(of window: AXUIElement) -> pid_t {
         var p: pid_t = 0
         AXUIElementGetPid(window, &p)
@@ -132,11 +151,20 @@ enum WindowFinder {
         AXUIElementPerformAction(button, kAXPressAction as CFString)
     }
 
+    /// One open window attributed to a profile: the raw AX handle plus a menu-ready
+    /// page title (browser/profile marker stripped). Order follows AX enumeration.
+    struct ProfileWindow {
+        let element: AXUIElement
+        let title: String
+    }
+
     /// Per-browser snapshot of currently open windows.
     struct WindowScan {
         /// profile.id → a window we could attribute to it (title-token match, or the
         /// lone-window fallback for opaque single-profile browsers).
         var windowByProfileID: [String: AXUIElement] = [:]
+        /// profile.id → every window attributed to it, for per-window switching in the menu.
+        var windowsByProfileID: [String: [ProfileWindow]] = [:]
         /// browser → total AX window count of its running process(es).
         var windowCount: [Browser: Int] = [:]
         /// browser → number of windows matched via an actual profile token in the title.
@@ -152,17 +180,18 @@ enum WindowFinder {
         var browserProfiles: [Browser: [ChromeProfile]] = [:]
         for p in profiles { browserProfiles[p.browser, default: []].append(p) }
 
-        var unmatchedByBrowser: [Browser: [AXUIElement]] = [:]
+        var unmatchedByBrowser: [Browser: [ProfileWindow]] = [:]
         for (browser, app) in allBrowserApps(Set(browserProfiles.keys)) {
             let profilesOfBrowser = browserProfiles[browser] ?? []
             let ws = windows(of: app.processIdentifier)
             scan.windowCount[browser, default: 0] += ws.count
             for w in ws {
                 guard let title = axTitle(of: w) else { continue }
+                let pw = ProfileWindow(element: w, title: pageTitle(from: title, appLabel: browser.displayName))
                 // Prefer a parenthetical display-name match over a given-name match so two profiles
                 // that share a given name (e.g. "Joy (JOY_M)" vs "Joy (Personal)") don't collide.
                 guard let tok = profileToken(from: title, appLabel: browser.displayName) else {
-                    unmatchedByBrowser[browser, default: []].append(w)
+                    unmatchedByBrowser[browser, default: []].append(pw)
                     continue
                 }
                 let byName = tok.name.flatMap { n in profilesOfBrowser.first { $0.displayName == n } }
@@ -172,19 +201,30 @@ enum WindowFinder {
                 if let p = match {
                     scan.tokenMatchCount[browser, default: 0] += 1
                     if scan.windowByProfileID[p.id] == nil { scan.windowByProfileID[p.id] = w }
+                    scan.windowsByProfileID[p.id, default: []].append(pw)
                 } else {
-                    unmatchedByBrowser[browser, default: []].append(w)
+                    unmatchedByBrowser[browser, default: []].append(pw)
                 }
             }
         }
         // Fallback: per-browser, if exactly one window is unmatched and exactly one profile of that
         // browser is still unmapped, pair them. Handles Brave / single-profile Chrome (no profile
         // token in the title) for the common single-profile case.
-        for (browser, unmatched) in unmatchedByBrowser where unmatched.count == 1 {
+        for (browser, unmatched) in unmatchedByBrowser {
             let profilesOfBrowser = browserProfiles[browser] ?? []
             let unmapped = profilesOfBrowser.filter { scan.windowByProfileID[$0.id] == nil }
-            if unmapped.count == 1 {
-                scan.windowByProfileID[unmapped[0].id] = unmatched[0]
+            guard unmapped.count == 1, !unmatched.isEmpty else { continue }
+            let p = unmapped[0]
+            if unmatched.count == 1 {
+                scan.windowByProfileID[p.id] = unmatched[0].element
+            }
+            // Per-window list: when the browser exposes no profile tokens at all (Brave /
+            // single-profile Chrome), every unmatched window can only belong to the one
+            // unmapped profile — list them all. When tokens ARE present, a stray unmatched
+            // window may belong to someone else (incognito, guest); only the lone-window
+            // pairing is safe to list.
+            if (scan.tokenMatchCount[browser] ?? 0) == 0 || unmatched.count == 1 {
+                scan.windowsByProfileID[p.id, default: []].append(contentsOf: unmatched)
             }
         }
         return scan
@@ -259,12 +299,22 @@ enum WindowFinder {
 
     static func focus(_ window: AXUIElement) {
         AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        // Make it the app's main + focused window BEFORE activating: when the app
+        // comes forward it then surfaces THIS window, not its last key window —
+        // essential when several windows of the same Chrome process are open.
+        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         let p = pid(of: window)
         if let app = NSRunningApplication(processIdentifier: p) {
             app.activate(options: [.activateIgnoringOtherApps])
         }
-        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        // Activation is asynchronous, and Chromium sometimes re-promotes its previous
+        // key window while becoming active — a second main+raise shortly after wins
+        // that race deterministically.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        }
     }
 }

@@ -12,6 +12,7 @@ struct MenuView: View {
     @State private var multiMode: Bool = false
     @State private var multiSelected: [String] = []   // profile.id
     @State private var openWindowsByID: [String: Bool] = [:]
+    @State private var profileWindows: [String: [WindowFinder.ProfileWindow]] = [:]
     @State private var axTrusted: Bool = AXPermission.isTrusted()
     @State private var focusedIndex: Int = 0
     @State private var keyMonitor: Any?
@@ -474,6 +475,7 @@ struct MenuView: View {
         let visible = visibleOrdered
         let focused = (visible.firstIndex(of: p) == focusedIndex)
         let canClose = axTrusted && openWindowsByID[p.id] == true
+        let wins = axTrusted ? (profileWindows[p.id] ?? []) : []
         ProfileRow(
             profile: p,
             multiSelected: multiSelected.contains(p.id),
@@ -482,6 +484,10 @@ struct MenuView: View {
             tag: settings.tagsEnabled ? settings.tag(for: p) : .none,
             kbdFocused: focused,
             dropTargeted: dropTargetID == p.id,
+            windowCount: wins.count,
+            windowAction: wins.isEmpty ? nil : { i in
+                if i < wins.count { focusWindow(wins[i]) }
+            },
             closeAction: canClose ? { closeWindows(of: p) } : nil
         ) {
             handleTap(p)
@@ -536,6 +542,28 @@ struct MenuView: View {
             }
         }
         .id(p.id)
+    }
+
+    /// Jump straight to one specific browser window (not a tab).
+    ///
+    /// Order matters: the popover made Polychrome the active app, and closing a
+    /// transient popover hands activation back to the previously active app. If we
+    /// focused Chrome first and closed after, that late reactivation would undo the
+    /// raise — so close first, then focus once the teardown has settled.
+    private func focusWindow(_ w: WindowFinder.ProfileWindow) {
+        let element = w.element
+        if settings.pinned {
+            WindowFinder.focus(element)
+            Task {
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                await refreshOpenWindowsAsync()
+            }
+        } else {
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                WindowFinder.focus(element)
+            }
+        }
     }
 
     private func dropTargetBinding(for p: ChromeProfile) -> Binding<Bool> {
@@ -754,6 +782,7 @@ struct MenuView: View {
             }
         }
         openWindowsByID = dict
+        profileWindows = result.scan.windowsByProfileID
         NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(trusted) windows=\(result.scan.windowByProfileID.count) tokens=\(result.scan.tokenMatchCount) active=\(result.activeByBrowser)")
     }
 }
