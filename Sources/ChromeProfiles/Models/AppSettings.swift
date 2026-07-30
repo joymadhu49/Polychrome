@@ -2,6 +2,19 @@ import Foundation
 import Combine
 import AppKit
 
+struct HotkeyRegistrationIssue: Equatable {
+    let attempted: HotkeyConfig
+    let error: HotkeyRegistrationError
+    let previousRestored: Bool
+
+    var message: String {
+        let status = previousRestored
+            ? "Your previous shortcut is still active."
+            : "No global hotkey is currently active."
+        return "\(error.message) \(status)"
+    }
+}
+
 @MainActor
 final class AppSettings: ObservableObject {
     @Published var launchAtLogin: Bool {
@@ -61,18 +74,25 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    @Published var hotkey: HotkeyConfig {
-        didSet {
-            hotkey.save()
-            HotkeyManager.shared.apply(hotkey)
-        }
-    }
+    @Published private(set) var hotkey: HotkeyConfig
+    @Published private(set) var activeHotkey: HotkeyConfig? = nil
+    @Published private(set) var hotkeyRegistrationIssue: HotkeyRegistrationIssue? = nil
+
+    private var pendingHotkey: HotkeyConfig? = nil
+    private let hotkeyDefaults: UserDefaults
+    private let hotkeyApply: (HotkeyConfig) -> Result<Void, HotkeyRegistrationError>
 
     @Published var layout: LayoutConfig {
         didSet { layout.save() }
     }
 
-    init() {
+    init(
+        hotkeyDefaults: UserDefaults = .standard,
+        hotkeyApply: @escaping (HotkeyConfig) -> Result<Void, HotkeyRegistrationError> = { HotkeyManager.shared.apply($0) },
+        applyThemeOnInit: Bool = true
+    ) {
+        self.hotkeyDefaults = hotkeyDefaults
+        self.hotkeyApply = hotkeyApply
         let d = UserDefaults.standard
         // URL quick-launch/history were removed in favor of direct row drops.
         // Clear any previously retained URLs during migration.
@@ -118,9 +138,9 @@ final class AppSettings: ObservableObject {
             self.tagByDir = [:]
             d.set(true, forKey: "tagByDirMigratedV2")
         }
-        self.hotkey = HotkeyConfig.load()
+        self.hotkey = HotkeyConfig.load(from: hotkeyDefaults)
         self.layout = LayoutConfig.load()
-        applyTheme()
+        if applyThemeOnInit { applyTheme() }
     }
 
     func tag(for profile: ChromeProfile) -> ProfileTag {
@@ -146,7 +166,55 @@ final class AppSettings: ObservableObject {
         NSApp.appearance = appearance
     }
 
+    func updateHotkey(_ candidate: HotkeyConfig) {
+        let previous = hotkey
+        let previousWasActive = previous.enabled && activeHotkey == previous
+
+        switch hotkeyApply(candidate) {
+        case .success:
+            hotkey = candidate
+            candidate.save(to: hotkeyDefaults)
+            activeHotkey = candidate.enabled ? candidate : nil
+            pendingHotkey = nil
+            hotkeyRegistrationIssue = nil
+        case .failure(let error):
+            pendingHotkey = candidate
+            var previousRestored = false
+            if previousWasActive {
+                if case .success = hotkeyApply(previous) {
+                    activeHotkey = previous
+                    previousRestored = true
+                } else {
+                    activeHotkey = nil
+                }
+            }
+            hotkeyRegistrationIssue = HotkeyRegistrationIssue(
+                attempted: candidate,
+                error: error,
+                previousRestored: previousRestored
+            )
+        }
+    }
+
     func applyHotkey() {
-        HotkeyManager.shared.apply(hotkey)
+        switch hotkeyApply(hotkey) {
+        case .success:
+            activeHotkey = hotkey.enabled ? hotkey : nil
+            pendingHotkey = nil
+            hotkeyRegistrationIssue = nil
+        case .failure(let error):
+            activeHotkey = nil
+            pendingHotkey = hotkey
+            hotkeyRegistrationIssue = HotkeyRegistrationIssue(
+                attempted: hotkey,
+                error: error,
+                previousRestored: false
+            )
+        }
+    }
+
+    func retryHotkeyRegistration() {
+        guard let pendingHotkey else { return }
+        updateHotkey(pendingHotkey)
     }
 }

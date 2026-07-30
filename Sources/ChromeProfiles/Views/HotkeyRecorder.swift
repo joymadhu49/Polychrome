@@ -62,8 +62,12 @@ struct HotkeyRecorder: View {
             // ignore plain modifier-only presses; require a non-modifier key
             let mods = HotkeyConfig.carbonModifiers(from: event.modifierFlags)
             guard mods != 0 else { return event }
-            let key = UInt32(event.keyCode)
-            config = HotkeyConfig(keyCode: key, modifiers: mods, enabled: config.enabled)
+            config = HotkeyConfig.recorded(
+                keyCode: event.keyCode,
+                modifierFlags: event.modifierFlags,
+                charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                enabled: config.enabled
+            )
             DispatchQueue.main.async { self.recording = false; self.stopMonitor() }
             return nil
         }

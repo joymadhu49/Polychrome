@@ -34,10 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBar = StatusBarController(rootView: AnyView(root))
         pinObserver = settings.$pinned.sink { [weak self] in self?.statusBar.setPinned($0) }
 
-        settings.applyHotkey()
         HotkeyManager.shared.onFire = { [weak self] in
             self?.statusBar.toggle()
         }
+        settings.applyHotkey()
     }
 
     func openSettings() {

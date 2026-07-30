@@ -6,6 +6,7 @@ struct HotkeyConfig: Codable, Equatable {
     var keyCode: UInt32          // Carbon virtual key code
     var modifiers: UInt32        // Carbon modifier flags
     var enabled: Bool
+    var displayCharacter: String? = nil // Presentation only; registration remains physical.
 
     static let storageKey = "HotkeyConfig.v1"
 
@@ -15,28 +16,81 @@ struct HotkeyConfig: Codable, Equatable {
         enabled: true
     )
 
-    static func load() -> HotkeyConfig {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
+    static func recorded(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        charactersIgnoringModifiers: String?,
+        enabled: Bool
+    ) -> HotkeyConfig {
+        HotkeyConfig(
+            keyCode: UInt32(keyCode),
+            modifiers: carbonModifiers(from: modifierFlags),
+            enabled: enabled,
+            displayCharacter: normalizedDisplayCharacter(charactersIgnoringModifiers)
+        )
+    }
+
+    static func load(from defaults: UserDefaults = .standard) -> HotkeyConfig {
+        guard let data = defaults.data(forKey: storageKey),
               let cfg = try? JSONDecoder().decode(HotkeyConfig.self, from: data) else {
             return defaultConfig
         }
         return cfg
     }
 
-    func save() {
+    func save(to defaults: UserDefaults = .standard) {
         if let data = try? JSONEncoder().encode(self) {
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            defaults.set(data, forKey: Self.storageKey)
         }
     }
 
     var displayString: String {
+        let hasShift = modifiers & UInt32(shiftKey) != 0
+        let baseName = Self.keyName(for: keyCode)
+        let capturedName = Self.normalizedDisplayCharacter(displayCharacter)
+        let shiftedName = hasShift ? Self.shiftedKeyName(for: keyCode) : nil
+        let keyName = capturedName ?? shiftedName ?? baseName
+        let shiftIsRepresented = shiftedName != nil || (capturedName != nil && capturedName != baseName)
         var parts: [String] = []
         if modifiers & UInt32(controlKey) != 0 { parts.append("⌃") }
         if modifiers & UInt32(optionKey)  != 0 { parts.append("⌥") }
-        if modifiers & UInt32(shiftKey)   != 0 { parts.append("⇧") }
+        if hasShift && !shiftIsRepresented { parts.append("⇧") }
         if modifiers & UInt32(cmdKey)     != 0 { parts.append("⌘") }
-        parts.append(Self.keyName(for: keyCode))
+        parts.append(keyName)
         return parts.joined()
+    }
+
+    static func normalizedDisplayCharacter(_ characters: String?) -> String? {
+        guard let characters, characters.count == 1 else { return nil }
+        let scalars = characters.unicodeScalars
+        guard !scalars.contains(where: {
+            let value = $0.value
+            let isPrivateUse = (0xE000...0xF8FF).contains(value)
+                || (0xF0000...0xFFFFD).contains(value)
+                || (0x100000...0x10FFFD).contains(value)
+            return CharacterSet.whitespacesAndNewlines.contains($0)
+                || CharacterSet.controlCharacters.contains($0)
+                || isPrivateUse
+        }) else {
+            return nil
+        }
+        if scalars.count == 1, let scalar = scalars.first, (97...122).contains(scalar.value),
+           let uppercase = UnicodeScalar(scalar.value - 32) {
+            return String(uppercase)
+        }
+        return characters
+    }
+
+    static func shiftedKeyName(for keyCode: UInt32) -> String? {
+        let map: [Int: String] = [
+            kVK_ANSI_1:"!", kVK_ANSI_2:"@", kVK_ANSI_3:"#", kVK_ANSI_4:"$", kVK_ANSI_5:"%",
+            kVK_ANSI_6:"^", kVK_ANSI_7:"&", kVK_ANSI_8:"*", kVK_ANSI_9:"(", kVK_ANSI_0:")",
+            kVK_ANSI_Grave:"~", kVK_ANSI_Minus:"_", kVK_ANSI_Equal:"+",
+            kVK_ANSI_LeftBracket:"{", kVK_ANSI_RightBracket:"}", kVK_ANSI_Backslash:"|",
+            kVK_ANSI_Semicolon:":", kVK_ANSI_Quote:"\"", kVK_ANSI_Comma:"<",
+            kVK_ANSI_Period:">", kVK_ANSI_Slash:"?"
+        ]
+        return map[Int(keyCode)]
     }
 
     static func keyName(for keyCode: UInt32) -> String {

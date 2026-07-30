@@ -688,8 +688,8 @@ struct MenuView: View {
 
             Spacer()
 
-            if settings.hotkey.enabled {
-                Text(settings.hotkey.displayString)
+            if let hotkey = settings.activeHotkey {
+                Text(hotkey.displayString)
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 8)
@@ -703,6 +703,17 @@ struct MenuView: View {
                             .stroke(Color.primary.opacity(0.18), lineWidth: 0.5)
                     )
                     .help("Global hotkey")
+            } else if settings.hotkey.enabled && settings.hotkeyRegistrationIssue != nil {
+                Button { openSettings() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text("Hotkey unavailable")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .help("Open Settings to retry the global hotkey")
             }
 
             Button {
