@@ -10,14 +10,19 @@ than deleting it, so the history of improvements stays visible.
 2. When you fix one — tick the box and note the version/PR.
 3. Before cutting a release, skim *High priority* to decide what's next.
 
-CI now builds every push and pull request (`.github/workflows/ci.yml`), so a green
-check on a PR means the app still compiles and bundles — the baseline for every
-item below.
+CI now tests and builds every push and pull request (`.github/workflows/ci.yml`),
+so a green check on a PR means the app's regression suite passes and it still
+compiles and bundles — the baseline for every item below.
 
 ---
 
 ## Shipped
 
+- [x] **Reliable shifted-symbol hotkeys** — recording `Shift + \`` now displays
+  the typed `~` while preserving the physical Carbon binding, with the same
+  treatment for other shifted punctuation. Conflicting shortcuts are no longer
+  silently saved as active: Polychrome restores the prior binding, explains the
+  failure, and offers Retry. Regression tests now run in CI. (post-v1.4.6)
 - [x] **Styled DMG installer** — the install window now has a designed
   backdrop with one native San Francisco type system, icon-and-label cards,
   a Polychrome gradient drag arrow, positioned icons, a volume icon, and a

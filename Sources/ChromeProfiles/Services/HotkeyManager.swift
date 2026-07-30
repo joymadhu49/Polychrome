@@ -2,6 +2,22 @@ import Foundation
 import Carbon.HIToolbox
 import AppKit
 
+enum HotkeyRegistrationError: Error, Equatable {
+    case handlerInstallation(OSStatus)
+    case registration(OSStatus)
+
+    var message: String {
+        switch self {
+        case .handlerInstallation(let status):
+            return "Polychrome couldn't prepare the global hotkey (OSStatus \(status))."
+        case .registration(let status) where status == eventHotKeyExistsErr:
+            return "This shortcut is already used by macOS or another app."
+        case .registration(let status):
+            return "Polychrome couldn't register this shortcut (OSStatus \(status))."
+        }
+    }
+}
+
 final class HotkeyManager {
     static let shared = HotkeyManager()
 
@@ -10,9 +26,9 @@ final class HotkeyManager {
     var onFire: (() -> Void)?
 
     @discardableResult
-    func apply(_ cfg: HotkeyConfig) -> Bool {
+    func apply(_ cfg: HotkeyConfig) -> Result<Void, HotkeyRegistrationError> {
         unregister()
-        guard cfg.enabled else { return true }
+        guard cfg.enabled else { return .success(()) }
 
         let hkID = EventHotKeyID(signature: OSType(0x43504846 /* "CPHF" */), id: 1)
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -26,15 +42,17 @@ final class HotkeyManager {
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
         guard handlerStatus == noErr else {
             NSLog("[Polychrome] HotkeyManager: InstallEventHandler failed (OSStatus \(handlerStatus))")
-            return false
+            unregister()
+            return .failure(.handlerInstallation(handlerStatus))
         }
 
         let regStatus = RegisterEventHotKey(cfg.keyCode, cfg.modifiers, hkID, GetApplicationEventTarget(), 0, &hotKeyRef)
         guard regStatus == noErr else {
             NSLog("[Polychrome] HotkeyManager: RegisterEventHotKey failed (OSStatus \(regStatus)) — the shortcut may already be claimed by another app")
-            return false
+            unregister()
+            return .failure(.registration(regStatus))
         }
-        return true
+        return .success(())
     }
 
     func unregister() {

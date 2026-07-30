@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "ChromeProfiles",
             path: "Sources/ChromeProfiles"
+        ),
+        .testTarget(
+            name: "ChromeProfilesTests",
+            dependencies: ["ChromeProfiles"],
+            path: "Tests/ChromeProfilesTests"
         )
     ]
 )

@@ -261,12 +261,41 @@ struct SettingsView: View {
             HStack {
                 Text("Shortcut")
                     .frame(width: 80, alignment: .leading)
-                HotkeyRecorder(config: $settings.hotkey)
+                HotkeyRecorder(config: Binding(
+                    get: { settings.hotkey },
+                    set: { settings.updateHotkey($0) }
+                ))
                 Spacer()
             }
             Text("Click the box, then press the keys to bind. The shortcut requires at least one modifier (⌘ ⌥ ⌃ ⇧).")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
+
+            if let issue = settings.hotkeyRegistrationIssue {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Couldn’t use \(issue.attempted.displayString)")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(issue.message)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Retry") { settings.retryHotkeyRegistration() }
+                        .controlSize(.small)
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.orange.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.orange.opacity(0.25), lineWidth: 0.5)
+                )
+            }
         }
     }
 

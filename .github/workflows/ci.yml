@@ -20,6 +20,9 @@ jobs:
       - name: Swift version
         run: swift --version
 
+      - name: Run tests
+        run: swift test
+
       - name: Build + bundle (ad-hoc signed)
         run: bash scripts/build.sh
 
