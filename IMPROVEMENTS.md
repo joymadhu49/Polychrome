@@ -22,7 +22,7 @@ compiles and bundles — the baseline for every item below.
   the typed `~` while preserving the physical Carbon binding, with the same
   treatment for other shifted punctuation. Conflicting shortcuts are no longer
   silently saved as active: Polychrome restores the prior binding, explains the
-  failure, and offers Retry. Regression tests now run in CI. (post-v1.4.6)
+  failure, and offers Retry. Regression tests now run in CI. (v1.4.7)
 - [x] **Styled DMG installer** — the install window now has a designed
   backdrop with one native San Francisco type system, icon-and-label cards,
   a Polychrome gradient drag arrow, positioned icons, a volume icon, and a
