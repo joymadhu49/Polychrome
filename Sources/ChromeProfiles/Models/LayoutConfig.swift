@@ -17,6 +17,18 @@ enum TileLayout: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// Compact label for the layout cards in Settings.
+    var shortName: String {
+        switch self {
+        case .smart:   return "Smart"
+        case .row:     return "Side by side"
+        case .column:  return "Stacked"
+        case .grid:    return "Grid"
+        case .splitH:  return "Main left"
+        case .splitV:  return "Main top"
+        }
+    }
+
     var icon: String {
         switch self {
         case .smart:  return "rectangle.3.group"

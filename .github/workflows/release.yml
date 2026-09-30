@@ -1,13 +1,14 @@
 name: Release (signed + notarized)
 
-# Cuts a downloadable, Gatekeeper-clean DMG — automatically.
+# Cuts a downloadable, Gatekeeper-clean DMG and the Sparkle appcast that
+# delivers it to installed copies — automatically.
 #
 # Triggers:
 #   • push to main — if Bundle/Info.plist's CFBundleShortVersionString has no
 #     matching v<version> tag yet, the release cuts itself: build, sign,
-#     notarize, create the tag + GitHub Release, attach the DMG. Merging a PR
-#     that bumps the version is the only human step. A push to main without a
-#     version bump releases nothing.
+#     notarize, create the tag + GitHub Release, attach the DMG and appcast.
+#     Merging a PR that bumps the version (and CFBundleVersion) is the only
+#     human step. A push to main without a version bump releases nothing.
 #   • push of a v* tag — the classic manual flow, still supported.
 #   • workflow_dispatch — optional release_tag / target_commitish override;
 #     with no inputs it auto-detects the version like a push to main.
@@ -19,6 +20,8 @@ name: Release (signed + notarized)
 #   AC_API_KEY_P8                base64 of the App Store Connect API key (.p8)
 #   AC_API_KEY_ID                the API Key ID
 #   AC_API_ISSUER_ID             the API Issuer ID
+#   SPARKLE_ED_PRIVATE_KEY       Sparkle's EdDSA private key (generate_keys -x), which
+#                                signs the DMG so installed copies accept the update
 #
 # Create base64 secrets with:  base64 -i Certificates.p12 | pbcopy
 
@@ -29,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag to release as (e.g. v1.4.2). Leave empty to auto-detect from Info.plist.'
+        description: 'Tag to release as (e.g. v1.5.0). Leave empty to auto-detect from Info.plist.'
         required: false
         default: ''
       target_commitish:
@@ -52,38 +55,97 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.ver.outputs.tag }}
+      signing: ${{ steps.secrets.outputs.present }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Decide whether a release is due
         id: ver
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          plist() { python3 -c "import plistlib,sys; print(plistlib.load(sys.stdin.buffer)['$1'])"; }
           TAG=""
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="$GITHUB_REF_NAME"
           elif [[ -n "${RELEASE_TAG:-}" ]]; then
             TAG="$RELEASE_TAG"
           else
-            VER=$(python3 -c "import plistlib; print(plistlib.load(open('Bundle/Info.plist','rb'))['CFBundleShortVersionString'])")
+            VER=$(plist CFBundleShortVersionString < Bundle/Info.plist)
             TAG="v$VER"
             if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
               echo "Tag $TAG already exists — nothing new to release."
               TAG=""
             fi
           fi
+
+          # Sparkle decides "is this newer" on CFBundleVersion alone. A release
+          # that bumps the marketing version but forgets the build number would
+          # publish fine and then never be offered to a single installed copy.
+          if [[ -n "$TAG" ]]; then
+            PREV=$(git ls-remote --tags --refs origin 'refs/tags/v*' | awk -F/ '{print $3}' \
+                   | grep -vx "$TAG" | sort -V | tail -1 || true)
+            if [[ -n "$PREV" ]]; then
+              git fetch -q --depth=1 origin "refs/tags/$PREV:refs/tags/$PREV"
+              PREV_BUILD=$(git show "$PREV:Bundle/Info.plist" | plist CFBundleVersion)
+              CUR_BUILD=$(plist CFBundleVersion < Bundle/Info.plist)
+              if (( CUR_BUILD <= PREV_BUILD )); then
+                echo "::error::CFBundleVersion $CUR_BUILD is not greater than $PREV's $PREV_BUILD — bump it in Bundle/Info.plist or Sparkle will never offer $TAG."
+                exit 1
+              fi
+            fi
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Release due: ${TAG:-no}"
 
+      # All seven are needed, and at different points: a missing notary key ID
+      # or Sparkle key is only discovered after a full macOS build and a DMG
+      # have already been paid for. Check the lot up front and leave the run
+      # green rather than failing every push to main until they are added.
+      - name: Check the signing secrets are in place
+        id: secrets
+        env:
+          DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          MISSING=()
+          for name in DEVELOPER_ID_CERT_P12 DEVELOPER_ID_CERT_PASSWORD KEYCHAIN_PASSWORD \
+                      AC_API_KEY_P8 AC_API_KEY_ID AC_API_ISSUER_ID SPARKLE_ED_PRIVATE_KEY; do
+            [[ -n "${!name:-}" ]] || MISSING+=("$name")
+          done
+
+          if [[ ${#MISSING[@]} -eq 0 ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "All seven signing secrets present."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### No release cut"
+              echo
+              echo "Skipped the build: ${#MISSING[@]} of 7 signing secrets are missing."
+              echo
+              for name in "${MISSING[@]}"; do echo "- \`$name\`"; done
+              echo
+              echo "Add them under **Settings -> Secrets and variables -> Actions**,"
+              echo "then re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            printf 'missing: %s\n' "${MISSING[@]}"
+          fi
+
   release:
     needs: check
-    if: needs.check.outputs.tag != ''
-    runs-on: macos-14
+    if: needs.check.outputs.tag != '' && needs.check.outputs.signing == 'true'
+    runs-on: macos-15
     env:
       POLYCHROME_SIGNING_IDENTITY: "Developer ID Application"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Import Developer ID certificate
         env:
@@ -114,6 +176,17 @@ jobs:
       - name: Build + sign app
         run: bash scripts/build.sh
 
+      # Notarize the app BEFORE it goes into the DMG, so the copy the user drags
+      # to /Applications carries its own ticket and verifies without asking Apple
+      # over the network. Notarizing only the DMG leaves the extracted app
+      # ticketless.
+      - name: Notarize + staple the app
+        env:
+          AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        run: bash scripts/notarize.sh build/Polychrome.app
+
       - name: Install create-dmg (styled installer window)
         run: brew install create-dmg
 
@@ -124,21 +197,34 @@ jobs:
           set -euo pipefail
           bash scripts/make-dmg.sh "${TAG#v}"
 
-      - name: Notarize + staple
+      # Second pass, on the DMG itself: this is the ticket Gatekeeper reads when
+      # someone opens the downloaded file.
+      - name: Notarize + staple the DMG
         env:
           AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
           AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
           AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
         run: bash scripts/notarize.sh
 
+      # Last, because stapling rewrote the DMG: the Sparkle signature has to cover
+      # the exact bytes people download. The appcast rides along as a release
+      # asset, and the app's feed URL follows releases/latest, so this release
+      # becomes the update.
+      - name: Sign the update and write the appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: bash scripts/make-appcast.sh
+
       # Creates the tag (when it doesn't exist yet) and the GitHub Release, and
-      # attaches the DMG. GITHUB_TOKEN-created tags don't re-trigger workflows,
-      # so the auto flow can't recurse.
-      - name: Publish the GitHub Release with the DMG
+      # attaches the DMG + appcast. GITHUB_TOKEN-created tags don't re-trigger
+      # workflows, so the auto flow can't recurse.
+      - name: Publish the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
           target_commitish: ${{ inputs.target_commitish || github.sha }}
           generate_release_notes: true
-          files: build/Polychrome-*.dmg
+          files: |
+            build/Polychrome-*.dmg
+            build/appcast.xml
           fail_on_unmatched_files: true

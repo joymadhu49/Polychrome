@@ -24,5 +24,11 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 joymadhu</string>
+    <key>SUFeedURL</key>
+    <string>https://github.com/joymadhu49/Polychrome/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>ajoIDYdrCj59w5c+p+BO7MKoJ8JmwOAeoxDt/YrwuKA=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>

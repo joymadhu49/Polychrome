@@ -2,48 +2,47 @@ import SwiftUI
 import AppKit
 import Carbon.HIToolbox
 
+/// Click-to-record shortcut field. Esc cancels; the first chord with a modifier is kept.
 struct HotkeyRecorder: View {
     @Binding var config: HotkeyConfig
     @State private var recording = false
+    @State private var hovering = false
     @State private var monitor: Any?
 
     var body: some View {
-        HStack(spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(recording ? Color.accentColor : Color.secondary.opacity(0.4), lineWidth: recording ? 2 : 1)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.secondary.opacity(0.08))
-                    )
-                HStack {
-                    Spacer()
-                    Text(recording ? "Press keys…" : config.displayString)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundColor(recording ? .accentColor : .primary)
-                    Spacer()
+        Button(action: toggleRecording) {
+            HStack(spacing: 6) {
+                if recording {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 6, height: 6)
+                    Text("Type shortcut…")
+                        .foregroundStyle(.tint)
+                } else {
+                    Text(config.displayString)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.primary)
                 }
             }
-            .frame(width: 160, height: 28)
+            .font(.system(size: 12))
+            .frame(minWidth: 120, minHeight: 24)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(hovering || recording ? 0.08 : 0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(recording ? Color.accentColor : Color.primary.opacity(0.12),
+                                  lineWidth: recording ? 1.5 : 0.5)
+            )
             .contentShape(Rectangle())
-            .onTapGesture { toggleRecording() }
-
-            Button(recording ? "Cancel" : "Change") {
-                toggleRecording()
-            }
-            .controlSize(.small)
-
-            Toggle(isOn: Binding(
-                get: { config.enabled },
-                set: { config.enabled = $0 }
-            )) {
-                Text("Enabled").fixedSize()
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .fixedSize()
         }
-        .onDisappear { stopMonitor() }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(recording ? "Press a shortcut, or Esc to cancel" : "Click to record a new shortcut")
+        .accessibilityLabel(recording ? "Recording shortcut" : "Shortcut \(config.displayString)")
+        .onDisappear { stopMonitor(); recording = false }
     }
 
     private func toggleRecording() {

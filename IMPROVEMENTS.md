@@ -18,6 +18,41 @@ compiles and bundles — the baseline for every item below.
 
 ## Shipped
 
+- [x] **Auto-updates via Sparkle** — daily check against the appcast attached to the
+  newest GitHub release; every DMG is EdDSA-signed in CI and verified before install.
+  Scheduled updates found mid-work show as a quiet "Update available" row in the menu
+  (Sparkle gentle reminders) instead of an alert stealing focus. Settings → General has
+  the toggles; the release job refuses to run if `CFBundleVersion` wasn't bumped.
+  (v1.5.0)
+- [x] **Universal binary** — releases were arm64-only, so Polychrome couldn't launch on
+  the Intel Macs that macOS 13 still supports. CI now asserts both slices. (v1.5.0)
+- [x] **Staple the app, not just the DMG** — the copy in /Applications had no ticket of
+  its own, so first launch needed Apple's servers. Notarization is now two-pass. (v1.5.0)
+- [x] **No more blank "Polychrome Settings" window** — the SwiftUI `App` lifecycle's
+  placeholder `Settings { EmptyView() }` scene opened as an empty window at launch.
+  Replaced with a plain AppKit entry point and a hidden Edit menu so ⌘C/⌘V still work.
+  (v1.5.0)
+- [x] **Redesigned menu** — search is the header; one shared mouse/keyboard highlight;
+  presence dot on the avatar; browser headers/badges only when 2+ browsers have
+  profiles; multi-select moved into the footer, which becomes a Cancel / Open / Tile bar;
+  window boxes only when there's more than one window; ⚙︎ menu with Settings, Check for
+  Updates, Refresh, About, Quit. (v1.5.0)
+- [x] **Number-key launch** — ⌘1–⌘9 open the first nine profiles; hold ⌘ to reveal the
+  numbers. Also ⌘, ⌘R, ⌘Q inside the menu. (v1.5.0)
+- [x] **Redesigned Settings** — native grouped Form (System Settings style), 7 panes incl.
+  About; visual layout cards; removed the outdated "Polychrome is ad-hoc signed" copy.
+  (v1.5.0)
+- [x] **Theme override reaches the menu** — the popover inherited the menu bar's
+  appearance (wallpaper-driven), so Light/Dark in Settings only affected the Settings
+  window. (v1.5.0)
+- [x] **Settings layout preview drew off-screen** — it ran mock rects through the
+  primary-display Y flip. Geometry is now split into a pure `frames(for:in:CGRect,…)`
+  used by previews and tests. (v1.5.0)
+- [x] **Display picker blank** when the saved display is disconnected — now shows the
+  main-display fallback tiling actually uses. (v1.5.0)
+- [x] **O(n²) row rendering** — rows looked up their index with a linear search each
+  render; now one index map per render, and list + keyboard nav share one section model.
+  (v1.5.0)
 - [x] **Reliable shifted-symbol hotkeys** — recording `Shift + \`` now displays
   the typed `~` while preserving the physical Carbon binding, with the same
   treatment for other shifted punctuation. Conflicting shortcuts are no longer
@@ -75,8 +110,14 @@ compiles and bundles — the baseline for every item below.
 
 ## High priority
 
-- [ ] **Unit tests for the pure logic.** `WindowTiler.frames` (geometry math),
-  the AX title parser (`WindowFinder.profileToken` — needs to become internal
+- [ ] **Hotkey-opened menu doesn't get keyboard focus.** Under macOS 14+'s cooperative
+  activation, `NSApp.activate(ignoringOtherApps:)` is ignored, so when the menu opens via
+  the global hotkey the previous app (e.g. Chrome) stays frontmost and receives typing,
+  ↑/↓, ↩ and ⌘1–9. Clicking the menubar icon works. Fix: host the menu in a
+  non-activating `NSPanel` (how Raycast/Alfred/Spotlight do it) instead of `NSPopover`.
+  Present in 1.4.x too.
+- [ ] **More unit tests for the pure logic.** `WindowTiler.frames` is covered now
+  (`WindowTilerFramesTests`); still missing: the AX title parser (`WindowFinder.profileToken` — needs to become internal
   or move to a testable type), profile sorting in `ChromeProfileLoader`, and
   `HotkeyConfig.displayString` are all pure functions begging for a test target
   in `Package.swift`. Run them in the CI job (`swift test`).
@@ -96,17 +137,10 @@ compiles and bundles — the baseline for every item below.
 - [ ] **More Chromium browsers.** `Browser` was designed so adding one is a
   single enum entry: Edge, Vivaldi, Arc, Opera, and vanilla Chromium are the
   obvious candidates. Needs each browser's `dataDir`, bundle ID, and app name.
-- [ ] **Number-key launch.** With the menu open, ⌘1–⌘9 should open/focus the
-  Nth visible profile — the keyboard-first flow stops one step short today.
-- [ ] **Auto-update.** Ship Sparkle (or a lightweight update check against the
-  GitHub Releases feed) so users get fixes without manually re-downloading the
-  DMG.
 - [ ] **Homebrew cask** (`brew install --cask polychrome`) once releases are
   stable — the notarized DMG already satisfies cask requirements.
-- [ ] **Menu list rendering scalability.** Each row computes
-  `visibleOrdered.firstIndex(of:)` for keyboard-focus highlighting — O(n²) per
-  render. Invisible at ~10 profiles; worth precomputing an index map if users
-  with 30+ profiles show up.
+- [ ] **Delta updates.** `generate_appcast` can produce binary deltas between
+  releases; the DMG is small today, so full downloads are fine for now.
 
 ## Low priority / ideas
 

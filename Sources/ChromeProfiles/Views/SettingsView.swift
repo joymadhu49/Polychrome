@@ -1,452 +1,655 @@
 import SwiftUI
 import AppKit
 
-struct SettingsView: View {
-    @ObservedObject var settings: AppSettings
-    @State private var axTrusted: Bool = AXPermission.isTrusted()
-    @State private var selection: Tab = .general
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case general, menu, browsers, tiling, shortcuts, permissions, about
+    var id: String { rawValue }
 
-    enum Tab: String, CaseIterable, Identifiable {
-        case general, browsers, appearance, layout, hotkeys, permissions
-        var id: String { rawValue }
-        var title: String {
-            switch self {
-            case .general:     return "General"
-            case .browsers:    return "Browsers"
-            case .appearance:  return "Appearance"
-            case .layout:      return "Side-by-Side"
-            case .hotkeys:     return "Hotkeys"
-            case .permissions: return "Permissions"
-            }
-        }
-        var icon: String {
-            switch self {
-            case .general:     return "gearshape"
-            case .browsers:    return "globe"
-            case .appearance:  return "paintbrush"
-            case .layout:      return "rectangle.split.2x1"
-            case .hotkeys:     return "keyboard"
-            case .permissions: return "lock.shield"
-            }
+    var title: String {
+        switch self {
+        case .general:     return "General"
+        case .menu:        return "Menu"
+        case .browsers:    return "Browsers"
+        case .tiling:      return "Tiling"
+        case .shortcuts:   return "Shortcuts"
+        case .permissions: return "Permissions"
+        case .about:       return "About"
         }
     }
 
-    private static var appVersion: String {
-        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String).map { "v\($0)" } ?? "dev"
+    var icon: String {
+        switch self {
+        case .general:     return "gearshape.fill"
+        case .menu:        return "menubar.rectangle"
+        case .browsers:    return "globe"
+        case .tiling:      return "rectangle.split.2x1.fill"
+        case .shortcuts:   return "command"
+        case .permissions: return "hand.raised.fill"
+        case .about:       return "info.circle.fill"
+        }
+    }
+
+    /// Sidebar tile color, System Settings style.
+    var tint: Color {
+        switch self {
+        case .general:     return .gray
+        case .menu:        return .blue
+        case .browsers:    return .teal
+        case .tiling:      return .indigo
+        case .shortcuts:   return .pink
+        case .permissions: return .orange
+        case .about:       return .gray
+        }
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var updates: UpdateController
+    @ObservedObject var router: SettingsRouter
+    @State private var axTrusted: Bool = AXPermission.isTrusted()
+
+    static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
+    }
+    static var buildNumber: String {
+        (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "—"
     }
 
     var body: some View {
         NavigationSplitView {
-            List(Tab.allCases, selection: $selection) { tab in
-                NavigationLink(value: tab) {
-                    Label(tab.title, systemImage: tab.icon)
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 170, ideal: 180, max: 200)
-            .listStyle(.sidebar)
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 5) {
-                    Image(systemName: "rectangle.3.group.bubble.left.fill")
-                        .font(.system(size: 9))
-                    Text("Polychrome \(Self.appVersion)")
-                        .font(.system(size: 10))
-                    Spacer()
-                }
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-            }
-        } detail: {
-            ScrollView {
-                Group {
-                    switch selection {
-                    case .general:     generalPane
-                    case .browsers:    browsersPane
-                    case .appearance:  appearancePane
-                    case .layout:      layoutPane
-                    case .hotkeys:     hotkeyPane
-                    case .permissions: permissionPane
+            List(SettingsPane.allCases, selection: Binding(
+                get: { Optional(router.pane) },
+                set: { if let p = $0 { router.pane = p } }
+            )) { pane in
+                NavigationLink(value: pane) {
+                    Label {
+                        Text(pane.title)
+                    } icon: {
+                        SidebarIcon(systemName: pane.icon, tint: pane.tint)
                     }
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .navigationTitle(selection.title)
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(190)
+        } detail: {
+            Group {
+                switch router.pane {
+                case .general:     generalPane
+                case .menu:        menuPane
+                case .browsers:    browsersPane
+                case .tiling:      tilingPane
+                case .shortcuts:   shortcutsPane
+                case .permissions: permissionsPane
+                case .about:       aboutPane
+                }
+            }
+            .formStyle(.grouped)
+            .toggleStyle(.switch)
+            .navigationTitle(router.pane.title)
         }
-        .frame(width: 720, height: 520)
+        .frame(width: 720, height: 540)
         .onAppear { axTrusted = AXPermission.isTrusted() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Coming back from System Settings is the moment the grant usually changes.
+            axTrusted = AXPermission.isTrusted()
+        }
     }
 
-    // MARK: panes
+    // MARK: General
 
     private var generalPane: some View {
-        VStack(spacing: 18) {
-            SettingsSection(title: "Behavior", description: "How Polychrome handles Chrome windows.") {
-                SettingsToggle(title: "Launch at login",
-                               subtitle: "Start Polychrome automatically when you log in.",
-                               isOn: $settings.launchAtLogin)
-                SettingsDivider()
-                SettingsToggle(title: "Focus existing windows",
-                               subtitle: "If a profile's window is already open, raise it instead of spawning a duplicate.",
-                               isOn: $settings.focusExisting)
-            }
-
-            SettingsSection(title: "Menu features", description: "Toggle features in the menubar popover.") {
-                SettingsToggle(title: "Pin menu on top",
-                               subtitle: "Keep the menu open above other windows — it won't close when you click away or launch a profile. The pin in the menu's title bar toggles this too.",
-                               isOn: $settings.pinned)
-                SettingsDivider()
-                SettingsToggle(title: "Group by Open / Closed",
-                               subtitle: "Show two sections: profiles with active windows, and the rest.",
-                               isOn: $settings.groupByStatus)
-                SettingsDivider()
-                SettingsToggle(title: "Group by browser",
-                               subtitle: "Split the profile list into Chrome and Brave sections.",
-                               isOn: $settings.groupByBrowser)
-                SettingsDivider()
-                SettingsToggle(title: "Profile tags",
-                               subtitle: "Right-click any profile to assign a color tag (Work, Personal, Test, etc.). Tags appear as a colored dot on the avatar.",
-                               isOn: $settings.tagsEnabled)
-            }
-        }
-    }
-
-    private var browsersPane: some View {
-        VStack(spacing: 18) {
-            SettingsSection(title: "Sources",
-                            description: "Pick which Chromium-based browsers Polychrome reads profiles from.") {
-                ForEach(Array(Browser.allCases.enumerated()), id: \.element) { idx, b in
-                    if idx > 0 { SettingsDivider() }
-                    browserRow(b)
+        Form {
+            Section {
+                Toggle(isOn: $settings.launchAtLogin) {
+                    SettingLabel("Launch at login",
+                                 "Start Polychrome automatically when you log in.")
+                }
+                Toggle(isOn: $settings.focusExisting) {
+                    SettingLabel("Focus existing windows",
+                                 "If a profile already has a window open, bring it forward instead of opening another.")
                 }
             }
 
+            Section {
+                if updates.isAvailable {
+                    Toggle(isOn: $updates.automaticallyChecks) {
+                        SettingLabel("Check for updates automatically",
+                                     "Polychrome checks once a day. The check sends nothing about your profiles.")
+                    }
+                    Toggle(isOn: $updates.automaticallyDownloads) {
+                        SettingLabel("Download and install automatically",
+                                     "Updates install in the background and apply the next time Polychrome starts.")
+                    }
+                    .disabled(!updates.automaticallyChecks)
+                    LabeledContent {
+                        Button("Check Now") { updates.checkForUpdates() }
+                            .disabled(!updates.canCheckForUpdates)
+                    } label: {
+                        SettingLabel("Version \(Self.appVersion)", lastCheckText)
+                    }
+                } else {
+                    LabeledContent {
+                        EmptyView()
+                    } label: {
+                        SettingLabel("Version \(Self.appVersion)",
+                                     "This is a development build. Updates are delivered to release builds only.")
+                    }
+                }
+            } header: {
+                Text("Updates")
+            }
+        }
+    }
+
+    private var lastCheckText: String {
+        guard let d = updates.lastCheck else { return "Not checked yet." }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return "Last checked \(f.localizedString(for: d, relativeTo: Date()))."
+    }
+
+    // MARK: Menu
+
+    private var menuPane: some View {
+        Form {
+            Section {
+                Picker("Appearance", selection: $settings.theme) {
+                    ForEach(ThemeOverride.allCases) { t in
+                        Text(t.displayName).tag(t)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text("Overrides the system appearance for Polychrome only.")
+                    .settingsFootnote()
+            }
+
+            Section {
+                Toggle(isOn: $settings.groupByStatus) {
+                    SettingLabel("Show open profiles first",
+                                 "Profiles with a window open get their own section at the top.")
+                }
+                Toggle(isOn: $settings.groupByBrowser) {
+                    SettingLabel("Group by browser",
+                                 "Separate sections per browser, when more than one has profiles.")
+                }
+                Toggle(isOn: $settings.pinned) {
+                    SettingLabel("Keep menu pinned on top",
+                                 "The menu stays open when you click away or open a profile. The pin in the menu toggles this too.")
+                }
+            } header: {
+                Text("List")
+            }
+
+            Section {
+                Toggle(isOn: $settings.showEmails) {
+                    SettingLabel("Show email addresses",
+                                 "Turn off while screen sharing to keep account emails private.")
+                }
+                Toggle(isOn: $settings.tagsEnabled) {
+                    SettingLabel("Color tags",
+                                 "Right-click a profile in the menu to tag it. Tags show as a dot after the name and are searchable.")
+                }
+                if settings.tagsEnabled {
+                    LabeledContent("Tag colors") {
+                        HStack(spacing: 6) {
+                            ForEach(ProfileTag.allCases.filter { $0 != .none }) { t in
+                                Circle()
+                                    .fill(t.color)
+                                    .frame(width: 12, height: 12)
+                                    .help(t.displayName)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Profile rows")
+            }
+        }
+    }
+
+    // MARK: Browsers
+
+    private var browsersPane: some View {
+        Form {
+            Section {
+                ForEach(Browser.allCases) { b in browserRow(b) }
+            } footer: {
+                Text("Polychrome reads each browser’s profile list from its Local State file. Nothing is modified.")
+                    .settingsFootnote()
+            }
         }
     }
 
     private func browserRow(_ b: Browser) -> some View {
         let installed = b.isInstalled
-        let enabled = settings.enabledBrowsers.contains(b)
-        return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: b.symbolName)
-                .font(.system(size: 18))
-                .foregroundStyle(installed ? Color(b.accent) : .secondary)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(b.displayName).font(.system(size: 13, weight: .medium))
-                Text(installed ? b.dataDir.path : "Not installed")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        return Toggle(isOn: Binding(
+            get: { settings.enabledBrowsers.contains(b) },
+            set: { isOn in
+                var s = settings.enabledBrowsers
+                if isOn { s.insert(b) } else { s.remove(b) }
+                if s.isEmpty { s.insert(.chrome) } // never empty
+                settings.enabledBrowsers = s
             }
-            Spacer()
-            Toggle("", isOn: Binding(
-                get: { enabled },
-                set: { isOn in
-                    var s = settings.enabledBrowsers
-                    if isOn { s.insert(b) } else { s.remove(b) }
-                    if s.isEmpty { s.insert(.chrome) } // never empty
-                    settings.enabledBrowsers = s
-                }
-            ))
-            .labelsHidden()
-            .accessibilityLabel(b.displayName)
-            .toggleStyle(.switch)
-            .disabled(!installed)
+        )) {
+            HStack(spacing: 10) {
+                SidebarIcon(systemName: b.symbolName, tint: installed ? Color(b.accent) : .gray, size: 26)
+                SettingLabel(b.displayName, installed ? "Installed" : "Not installed")
+            }
         }
+        .disabled(!installed)
+        .accessibilityLabel(b.displayName)
     }
 
-    private var appearancePane: some View {
-        VStack(spacing: 18) {
-            SettingsSection(title: "Theme", description: "Override the system appearance for Polychrome only.") {
-                Picker("Theme", selection: $settings.theme) {
-                    ForEach(ThemeOverride.allCases) { t in
-                        Label(t.displayName, systemImage: t.icon).tag(t)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-            }
+    // MARK: Tiling
 
-            SettingsSection(title: "Profile rows", description: "Control what's shown for each profile in the menubar popover.") {
-                SettingsToggle(title: "Show email addresses",
-                               subtitle: "Hide emails for screen-sharing or privacy.",
-                               isOn: $settings.showEmails)
-            }
-
-            if settings.tagsEnabled {
-                SettingsSection(title: "Tag palette", description: "Available tag colors. Assign tags by right-clicking a profile in the menu.") {
-                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(56), spacing: 10), count: 6), spacing: 10) {
-                        ForEach(ProfileTag.allCases.filter { $0 != .none }) { t in
-                            VStack(spacing: 4) {
-                                Circle()
-                                    .fill(t.color)
-                                    .frame(width: 22, height: 22)
-                                    .overlay(Circle().stroke(.primary.opacity(0.15), lineWidth: 0.5))
-                                Text(t.displayName)
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            .fixedSize()
+    private var tilingPane: some View {
+        Form {
+            Section {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                    ForEach(TileLayout.allCases) { l in
+                        LayoutCard(layout: l,
+                                   config: settings.layout,
+                                   selected: settings.layout.layout == l) {
+                            settings.layout.layout = l
                         }
                     }
                 }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Layout")
+            } footer: {
+                Text(layoutFootnote).settingsFootnote()
             }
-        }
-    }
 
-    private var layoutPane: some View {
-        VStack(spacing: 18) {
-            SettingsSection(title: "Layout", description: "How windows arrange when you click Side-by-side.") {
-                Picker("Layout", selection: $settings.layout.layout) {
-                    ForEach(TileLayout.allCases) { l in
-                        Label(l.displayName, systemImage: l.icon).tag(l)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-
-                SettingsDivider()
-
-                LabelledSlider(title: "Padding",
-                               value: Binding(
-                                get: { Double(settings.layout.paddingPx) },
-                                set: { settings.layout.paddingPx = CGFloat($0) }
-                               ),
-                               range: 0...32, step: 1, suffix: "px")
-
+            Section {
+                SliderRow(title: "Gap between windows",
+                          value: Binding(get: { Double(settings.layout.paddingPx) },
+                                         set: { settings.layout.paddingPx = CGFloat($0) }),
+                          range: 0...32,
+                          format: { "\(Int($0)) pt" })
                 if settings.layout.layout == .splitH || settings.layout.layout == .splitV {
-                    SettingsDivider()
-                    LabelledSlider(title: "First pane size",
-                                   value: $settings.layout.splitPercent,
-                                   range: 0.2...0.8, step: 0.05, suffix: "%",
-                                   format: { "\(Int($0 * 100))%" })
+                    SliderRow(title: "Main window size",
+                              value: $settings.layout.splitPercent,
+                              range: 0.2...0.8, step: 0.05,
+                              format: { "\(Int(($0 * 100).rounded()))%" })
                 }
-
-                SettingsDivider()
-
-                SettingsToggle(title: "Avoid menu bar and Dock",
-                               subtitle: "Use only the visible portion of the screen.",
-                               isOn: $settings.layout.avoidMenubar)
-            }
-
-            SettingsSection(title: "Display", description: "Which display windows tile across.") {
-                Picker("Display", selection: $settings.layout.displayID) {
+                Toggle("Avoid the menu bar and Dock", isOn: $settings.layout.avoidMenubar)
+                Picker("Display", selection: displaySelection) {
                     Text("Main display").tag(nil as UInt32?)
-                    ForEach(DisplayService.screens(), id: \.id) { d in
+                    ForEach(screens, id: \.id) { d in
                         Text("\(d.name) — \(Int(d.frame.width))×\(Int(d.frame.height))")
                             .tag(Optional(d.id))
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-            }
-
-            SettingsSection(title: "Preview", description: "How 4 windows would tile right now.") {
-                LayoutPreview(layout: settings.layout, count: 4)
-                    .frame(height: 140)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.primary.opacity(0.04))
-                    )
+            } header: {
+                Text("Arrangement")
             }
         }
     }
 
-    private var hotkeyPane: some View {
-        SettingsSection(title: "Global hotkey",
-                        description: "Press this shortcut anywhere to open the Polychrome menu.") {
-            HStack {
-                Text("Shortcut")
-                    .frame(width: 80, alignment: .leading)
-                HotkeyRecorder(config: Binding(
-                    get: { settings.hotkey },
-                    set: { settings.updateHotkey($0) }
+    private var screens: [DisplayInfo] { DisplayService.screens() }
+
+    /// A saved display that's no longer connected tiles on the main display
+    /// (DisplayService falls back), so show that instead of an empty picker.
+    private var displaySelection: Binding<UInt32?> {
+        Binding(
+            get: {
+                let id = settings.layout.displayID
+                return screens.contains { $0.id == id } ? id : nil
+            },
+            set: { settings.layout.displayID = $0 }
+        )
+    }
+
+    private var layoutFootnote: String {
+        switch settings.layout.layout {
+        case .smart:  return "Up to three windows sit side by side; four or more form a grid."
+        case .row:    return "Every window gets an equal-width column."
+        case .column: return "Every window gets an equal-height row."
+        case .grid:   return "Windows fill the most square grid that fits them."
+        case .splitH: return "The first profile you select gets the large pane; the rest stack on the right."
+        case .splitV: return "The first profile you select gets the large pane; the rest share the bottom."
+        }
+    }
+
+    // MARK: Shortcuts
+
+    private var shortcutsPane: some View {
+        Form {
+            Section {
+                Toggle("Enable global shortcut", isOn: Binding(
+                    get: { settings.hotkey.enabled },
+                    set: { on in
+                        var c = settings.hotkey
+                        c.enabled = on
+                        settings.updateHotkey(c)
+                    }
                 ))
-                Spacer()
-            }
-            Text("Click the box, then press the keys to bind. The shortcut requires at least one modifier (⌘ ⌥ ⌃ ⇧).")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-
-            if let issue = settings.hotkeyRegistrationIssue {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Couldn’t use \(issue.attempted.displayString)")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(issue.message)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Retry") { settings.retryHotkeyRegistration() }
-                        .controlSize(.small)
+                LabeledContent("Open the menu") {
+                    HotkeyRecorder(config: Binding(
+                        get: { settings.hotkey },
+                        set: { settings.updateHotkey($0) }
+                    ))
                 }
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.orange.opacity(0.08))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.orange.opacity(0.25), lineWidth: 0.5)
-                )
+                .disabled(!settings.hotkey.enabled)
+
+                if let issue = settings.hotkeyRegistrationIssue {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Couldn’t use \(issue.attempted.displayString)")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(issue.message)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Button("Retry") { settings.retryHotkeyRegistration() }
+                            .controlSize(.small)
+                    }
+                }
+            } header: {
+                Text("Global")
+            } footer: {
+                Text("Click the field, then press the keys. A shortcut needs at least one modifier (⌘ ⌥ ⌃ ⇧).")
+                    .settingsFootnote()
+            }
+
+            Section {
+                ShortcutRow("Open or focus the highlighted profile", keys: ["↩"])
+                ShortcutRow("Open profile 1 – 9", keys: ["⌘", "1 – 9"])
+                ShortcutRow("Move the highlight", keys: ["↑", "↓"])
+                ShortcutRow("Clear search, leave selection, close", keys: ["esc"])
+                ShortcutRow("Refresh profiles", keys: ["⌘", "R"])
+                ShortcutRow("Settings", keys: ["⌘", ","])
+                ShortcutRow("Quit Polychrome", keys: ["⌘", "Q"])
+            } header: {
+                Text("In the menu")
+            } footer: {
+                Text("Hold ⌘ while the menu is open to see each profile’s number.")
+                    .settingsFootnote()
             }
         }
     }
 
-    private var permissionPane: some View {
-        VStack(spacing: 18) {
-            SettingsSection(title: "Accessibility",
-                            description: "Required for side-by-side tiling and duplicate-window detection.") {
-                HStack(spacing: 10) {
-                    Image(systemName: axTrusted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                        .font(.system(size: 22))
+    // MARK: Permissions
+
+    private var permissionsPane: some View {
+        Form {
+            Section {
+                HStack(spacing: 12) {
+                    Image(systemName: axTrusted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .font(.system(size: 26))
                         .foregroundStyle(axTrusted ? Color.green : .orange)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(axTrusted ? "Permission granted" : "Permission required")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(axTrusted
-                             ? "Polychrome can position Chrome windows."
-                             : "Grant in System Settings → Privacy & Security → Accessibility.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
+                    SettingLabel(axTrusted ? "Accessibility access is on" : "Accessibility access is off",
+                                 axTrusted
+                                     ? "Polychrome can find each profile’s windows, focus them, and tile them."
+                                     : "Without it Polychrome can still open profiles, but can’t tell which are open, switch between their windows, or tile them.")
                     Spacer()
                 }
+                .padding(.vertical, 2)
                 HStack {
-                    Button("Open System Settings") { AXPermission.openSystemSettings() }
-                    Button("Re-check") { axTrusted = AXPermission.isTrusted() }
+                    Spacer()
+                    Button("Check Again") { axTrusted = AXPermission.isTrusted() }
+                    Button("Open System Settings…") {
+                        _ = AXPermission.isTrusted(prompt: true)
+                        AXPermission.openSystemSettings()
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                SettingsDivider()
-                SettingsToggle(title: "Show banner in menu when not granted",
-                               subtitle: "Hide the orange banner at the top of the menubar popover.",
-                               isOn: $settings.showAXBanner)
+            } header: {
+                Text("Accessibility")
+            } footer: {
+                Text("If Polychrome is listed in System Settings but still shows as off, remove it with the – button and add it again.")
+                    .settingsFootnote()
             }
 
-            SettingsSection(title: "Why does macOS keep asking?",
-                            description: "Polychrome is ad-hoc signed. Each rebuild gets a new signature, so macOS treats it as a new app and re-prompts.") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Workarounds")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("• Install Polychrome.app to /Applications and don't rebuild over it.")
-                    Text("• Developers: create a persistent self-signed code-signing identity in Keychain Access, then sign builds with it (see README).")
-                    Text("• On macOS 15+, a weekly Accessibility usage reminder is a system feature.")
+            Section {
+                Toggle(isOn: $settings.showAXBanner) {
+                    SettingLabel("Remind me in the menu",
+                                 "Show a banner at the top of the menu while access is off.")
                 }
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: About
+
+    private var aboutPane: some View {
+        Form {
+            Section {
+                VStack(spacing: 10) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 88, height: 88)
+                    Text("Polychrome")
+                        .font(.system(size: 20, weight: .semibold))
+                    Text("Version \(Self.appVersion) (\(Self.buildNumber))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Text("Every Chrome and Brave profile, one click from the menu bar.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    if updates.isAvailable {
+                        Button("Check for Updates…") { updates.checkForUpdates() }
+                            .disabled(!updates.canCheckForUpdates)
+                            .padding(.top, 4)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+            }
+
+            Section {
+                LinkRow(title: "Release notes", url: "https://github.com/joymadhu49/Polychrome/releases")
+                LinkRow(title: "Source code", url: "https://github.com/joymadhu49/Polychrome")
+                LinkRow(title: "Report an issue", url: "https://github.com/joymadhu49/Polychrome/issues/new")
+            } footer: {
+                Text((Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String).map { "\($0) · MIT License" } ?? "MIT License")
+                    .settingsFootnote()
             }
         }
     }
 }
 
-// MARK: components
+// MARK: - components
 
-struct SettingsSection<Content: View>: View {
-    let title: String
-    let description: String?
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 15, weight: .semibold))
-                if let description, !description.isEmpty {
-                    Text(description)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-            }
-            VStack(alignment: .leading, spacing: 10) {
-                content
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.primary.opacity(0.04))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-            )
-        }
-    }
-}
-
-struct SettingsDivider: View {
-    var body: some View {
-        Divider().opacity(0.4)
-    }
-}
-
-struct SettingsToggle: View {
+/// Title with an optional secondary line — the System Settings row label.
+struct SettingLabel: View {
     let title: String
     let subtitle: String?
-    @Binding var isOn: Bool
+
+    init(_ title: String, _ subtitle: String? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+    }
 
     var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .medium))
-                if let subtitle {
-                    Text(subtitle).font(.system(size: 11)).foregroundColor(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            Toggle("", isOn: $isOn).labelsHidden().accessibilityLabel(title).toggleStyle(.switch)
         }
     }
 }
 
-struct LabelledSlider: View {
+/// White glyph on a rounded colored tile, like System Settings' sidebar.
+struct SidebarIcon: View {
+    let systemName: String
+    let tint: Color
+    var size: CGFloat = 20
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: size * 0.52, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(
+                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                    .fill(tint.gradient)
+            )
+    }
+}
+
+struct SliderRow: View {
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>
-    let step: Double
-    let suffix: String
-    var format: ((Double) -> String)? = nil
+    var step: Double? = nil
+    let format: (Double) -> String
 
     var body: some View {
-        HStack {
-            Text(title).frame(width: 110, alignment: .leading)
-            Slider(value: $value, in: range, step: step)
-            Text(format?(value) ?? "\(Int(value)) \(suffix)")
-                .monospacedDigit()
-                .frame(width: 60, alignment: .trailing)
-                .foregroundColor(.secondary)
+        LabeledContent(title) {
+            HStack(spacing: 10) {
+                slider
+                    .frame(maxWidth: 220)
+                Text(format(value))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
         }
+    }
+
+    /// A stepped Slider draws a tick per step (32 for the gap). Without a step,
+    /// the value is rounded to whole numbers instead, and the track stays clean.
+    @ViewBuilder private var slider: some View {
+        if let step {
+            Slider(value: $value, in: range, step: step)
+        } else {
+            Slider(value: Binding(get: { value }, set: { value = $0.rounded() }), in: range)
+        }
+    }
+}
+
+struct ShortcutRow: View {
+    let title: String
+    let keys: [String]
+
+    init(_ title: String, keys: [String]) {
+        self.title = title
+        self.keys = keys
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 3) {
+                ForEach(keys, id: \.self) { KeyCap($0) }
+            }
+        }
+    }
+}
+
+struct LinkRow: View {
+    let title: String
+    let url: String
+
+    var body: some View {
+        Button {
+            if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+        } label: {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// A selectable thumbnail of one tiling layout.
+struct LayoutCard: View {
+    let layout: TileLayout
+    let config: LayoutConfig
+    let selected: Bool
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    /// The user's own split size, but a thumbnail-scale gap.
+    private var previewConfig: LayoutConfig {
+        var c = config
+        c.layout = layout
+        c.paddingPx = 3
+        return c
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 7) {
+                LayoutPreview(layout: previewConfig, count: layout == .splitH || layout == .splitV ? 3 : 4,
+                              highlighted: selected)
+                    .frame(height: 58)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(0.05))
+                    )
+                Text(layout.shortName)
+                    .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? .primary : .secondary)
+            }
+            .padding(7)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(selected ? Color.accentColor.opacity(0.10)
+                                   : Color.primary.opacity(hovering ? 0.04 : 0))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.10),
+                                  lineWidth: selected ? 1.5 : 0.5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(layout.displayName)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
 struct LayoutPreview: View {
     let layout: LayoutConfig
     let count: Int
+    var highlighted: Bool = true
 
     var body: some View {
         GeometryReader { geo in
-            let rect = CGRect(origin: .zero, size: geo.size)
-            let mock = DisplayInfo(id: 0, name: "preview", frame: rect, visibleFrame: rect, isMain: true)
-            let frames = WindowTiler.frames(for: count, in: mock, layout: layout)
+            let frames = WindowTiler.frames(for: count, in: CGRect(origin: .zero, size: geo.size), layout: layout)
+            let tint = highlighted ? Color.accentColor : Color.secondary
             ZStack(alignment: .topLeading) {
                 ForEach(0..<frames.count, id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.accentColor.opacity(0.22))
+                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                        .fill(tint.opacity(i == 0 ? 0.45 : 0.25))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 3)
-                                .stroke(Color.accentColor, lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                                .strokeBorder(tint.opacity(0.7), lineWidth: 0.75)
                         )
                         .frame(width: max(0, frames[i].width), height: max(0, frames[i].height))
                         .offset(x: frames[i].minX, y: frames[i].minY)
                 }
             }
         }
-        .padding(6)
+        .padding(4)
+    }
+}
+
+private extension Text {
+    func settingsFootnote() -> some View {
+        self.font(.system(size: 11)).foregroundStyle(.secondary)
     }
 }

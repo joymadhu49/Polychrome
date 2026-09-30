@@ -2,10 +2,28 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+/// One titled run of rows in the menu. The list and keyboard navigation both read
+/// from `sections`, so what you see top-to-bottom and what ↑/↓/⌘1–9 reach can never
+/// drift apart.
+private struct MenuSection: Identifiable {
+    let id: String
+    let title: String?          // nil = no header (a single flat list)
+    let browser: Browser?       // set when the section is one browser's profiles
+    let profiles: [ChromeProfile]
+}
+
+private enum MenuMetrics {
+    static let width: CGFloat = 340
+    static let rowHeight: CGFloat = 40
+    static let headerHeight: CGFloat = 28
+    static let listMaxHeight: CGFloat = 440
+}
+
 struct MenuView: View {
     @ObservedObject var loader: ChromeProfileLoader
     @ObservedObject var settings: AppSettings
-    let openSettings: () -> Void
+    @ObservedObject var updates: UpdateController
+    let openSettings: (SettingsPane?) -> Void
     let dismiss: () -> Void
 
     @State private var query: String = ""
@@ -17,10 +35,12 @@ struct MenuView: View {
     @State private var focusedIndex: Int = 0
     @State private var keyMonitor: Any?
     @State private var menuVisible: Bool = false
+    @State private var commandHeld: Bool = false
+    @State private var hoverSuppressedUntil: Date = .distantPast
     @State private var dropTargetID: String?       // row currently hovered by a URL drag
     @FocusState private var searchFocused: Bool
 
-    // MARK: filtering
+    // MARK: data
 
     private var filteredProfiles: [ChromeProfile] {
         guard !query.isEmpty else { return loader.profiles }
@@ -33,43 +53,77 @@ struct MenuView: View {
         }
     }
 
-    private var openProfiles: [ChromeProfile] {
-        filteredProfiles.filter { openWindowsByID[$0.id] == true }
-    }
-    private var closedProfiles: [ChromeProfile] {
-        filteredProfiles.filter { openWindowsByID[$0.id] != true }
+    private func isOpen(_ p: ChromeProfile) -> Bool { openWindowsByID[p.id] == true }
+
+    /// More than one browser actually contributes profiles — only then are browser
+    /// headers and avatar badges worth the space.
+    private var showsBrowserIdentity: Bool {
+        Set(loader.profiles.map(\.browser)).count > 1
     }
 
-    /// The ordered, visible list — matches what the user sees top-to-bottom.
-    /// Used by keyboard nav to map focusedIndex to a profile.
-    /// Open profiles always lead, across all browsers — they're the reachable ones.
-    private var visibleOrdered: [ChromeProfile] {
-        if settings.groupByStatus && axTrusted {
-            let open = orderedByBrowser(filteredProfiles.filter { openWindowsByID[$0.id] == true })
-            let closed = filteredProfiles.filter { openWindowsByID[$0.id] != true }
-            return open + (settings.groupByBrowser ? orderedByBrowser(closed) : closed)
+    private var showsOpenGroup: Bool { settings.groupByStatus && axTrusted }
+
+    private var sections: [MenuSection] {
+        let list = filteredProfiles
+        let splitByBrowser = settings.groupByBrowser && showsBrowserIdentity
+
+        func byBrowser(_ ps: [ChromeProfile], prefix: String) -> [MenuSection] {
+            Browser.allCases.compactMap { b in
+                let group = ps.filter { $0.browser == b }
+                guard !group.isEmpty else { return nil }
+                return MenuSection(id: prefix + b.rawValue, title: b.displayName, browser: b, profiles: group)
+            }
         }
-        if settings.groupByBrowser { return orderedByBrowser(filteredProfiles) }
-        return filteredProfiles
+
+        if showsOpenGroup {
+            // Open profiles lead the whole list, whatever browser they belong to —
+            // they're the ones you're most likely reaching for.
+            let open = Browser.allCases.flatMap { b in list.filter { $0.browser == b && isOpen($0) } }
+            let rest = list.filter { !isOpen($0) }
+            var out: [MenuSection] = []
+            if !open.isEmpty {
+                out.append(MenuSection(id: "open", title: "Open", browser: nil, profiles: open))
+            }
+            if splitByBrowser {
+                out += byBrowser(rest, prefix: "rest-")
+            } else if !rest.isEmpty {
+                out.append(MenuSection(id: "rest", title: open.isEmpty ? nil : "Other profiles",
+                                       browser: nil, profiles: rest))
+            }
+            return out
+        }
+        if splitByBrowser { return byBrowser(list, prefix: "") }
+        return list.isEmpty ? [] : [MenuSection(id: "all", title: nil, browser: nil, profiles: list)]
     }
 
-    private func orderedByBrowser(_ list: [ChromeProfile]) -> [ChromeProfile] {
-        Browser.allCases.flatMap { b in list.filter { $0.browser == b } }
+    private var listHeight: CGFloat {
+        let secs = sections
+        guard !secs.isEmpty else { return 132 }
+        var h: CGFloat = 12
+        for s in secs {
+            if s.title != nil { h += MenuMetrics.headerHeight }
+            h += CGFloat(s.profiles.count) * MenuMetrics.rowHeight
+        }
+        if settings.groupByStatus && !axTrusted { h += 36 }
+        if loader.lastError != nil { h += 30 }
+        return min(h, MenuMetrics.listMaxHeight)
     }
+
+    // MARK: body
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            titleBar
+        let secs = sections
+        let ordered = secs.flatMap(\.profiles)
+        VStack(spacing: 0) {
+            header
+            Divider()
             if !axTrusted && settings.showAXBanner { axBanner }
-            searchBar
-            multiToolbar
-            Divider().opacity(0.4)
-            profileList
-            if multiMode { multiActionBar }
-            Divider().opacity(0.4)
+            profileList(secs, ordered: ordered)
+            if let version = updates.pendingVersion { updateBanner(version) }
+            Divider()
             footer
         }
-        .frame(width: 320)
+        .frame(width: MenuMetrics.width)
         .task {
             axTrusted = AXPermission.isTrusted()
             menuVisible = true
@@ -84,12 +138,16 @@ struct MenuView: View {
             loader.reload()
             query = ""            // fresh start on every open, like Spotlight
             focusedIndex = 0
+            commandHeld = false
+            // Rows appearing under a resting pointer fire hover-enter; the first row
+            // should stay highlighted until the mouse actually moves.
+            hoverSuppressedUntil = Date().addingTimeInterval(0.5)
             installKeyMonitor()   // reused popover may not re-run .task; ensure arrow/return nav is live
             focusSearch()
             Task { await refreshOpenWindowsAsync() }
         }
-        // Live-refresh the OPEN list while the menu is showing, so closing a window
-        // (or one that finishes launching) updates the dots without a manual refresh.
+        // Live-refresh the open state while the menu is showing, so closing a window
+        // (or one that finishes launching) updates without a manual refresh.
         // No-op while hidden — the reused popover keeps this view alive between opens.
         .onReceive(Timer.publish(every: 2.5, on: .main, in: .common).autoconnect()) { _ in
             guard menuVisible else { return }
@@ -97,11 +155,12 @@ struct MenuView: View {
         }
         .onDisappear {
             menuVisible = false
+            commandHeld = false
             removeKeyMonitor()
         }
     }
 
-    // MARK: keyboard nav
+    // MARK: keyboard
 
     /// The popover window may not be key yet when the show notification fires,
     /// so retry shortly after — immediate assignment alone races makeKey().
@@ -114,7 +173,33 @@ struct MenuView: View {
 
     private func installKeyMonitor() {
         removeKeyMonitor()
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [self] event in
+            if event.type == .flagsChanged {
+                // Only the four chord modifiers — Caps Lock or fn must not hide the hints.
+                let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+                commandHeld = mods == .command
+                return event
+            }
+            let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            if mods == .command, let ch = event.charactersIgnoringModifiers {
+                switch ch {
+                case "1"..."9":
+                    let list = sections.flatMap(\.profiles)
+                    if let n = Int(ch), n <= list.count { handleTap(list[n - 1]) }
+                    return nil
+                case ",":
+                    openSettings(nil)
+                    return nil
+                case "q":
+                    NSApp.terminate(nil)
+                    return nil
+                case "r":
+                    refresh()
+                    return nil
+                default:
+                    return event
+                }
+            }
             switch event.keyCode {
             case 125: // down
                 moveFocus(by: 1)
@@ -149,218 +234,153 @@ struct MenuView: View {
     }
 
     private func moveFocus(by delta: Int) {
-        let list = visibleOrdered
-        guard !list.isEmpty else { return }
-        let next = max(0, min(list.count - 1, focusedIndex + delta))
-        focusedIndex = next
+        let count = sections.reduce(0) { $0 + $1.profiles.count }
+        guard count > 0 else { return }
+        hoverSuppressedUntil = Date().addingTimeInterval(0.35)
+        focusedIndex = max(0, min(count - 1, focusedIndex + delta))
     }
 
     private func focusedProfile() -> ChromeProfile? {
-        let list = visibleOrdered
+        let list = sections.flatMap(\.profiles)
         guard !list.isEmpty else { return nil }
-        let i = max(0, min(list.count - 1, focusedIndex))
-        return list[i]
+        return list[max(0, min(list.count - 1, focusedIndex))]
+    }
+
+    /// The pointer and the arrow keys drive one shared highlight, like a native menu.
+    /// Arrow-key scrolling slides rows under a resting pointer, which would otherwise
+    /// yank the highlight back to the mouse — so hover is ignored right after a key
+    /// (and right after the menu opens).
+    private func hoverFocus(_ index: Int) {
+        guard Date() >= hoverSuppressedUntil else { return }
+        focusedIndex = index
+    }
+
+    // MARK: header
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField("Search profiles", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .focused($searchFocused)
+                .onChange(of: query) { _ in focusedIndex = 0 }
+            if !query.isEmpty {
+                IconButton(systemName: "xmark.circle.fill", help: "Clear search") { query = "" }
+            }
+            IconButton(systemName: settings.pinned ? "pin.fill" : "pin",
+                       help: settings.pinned
+                           ? "Unpin — the menu closes when you click away"
+                           : "Pin — keep the menu open above other windows",
+                       active: settings.pinned) {
+                settings.pinned.toggle()
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 46)
     }
 
     // MARK: banners
 
     private var axBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.shield.fill")
+        HStack(spacing: 10) {
+            Image(systemName: "hand.raised.fill")
+                .font(.system(size: 12))
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Accessibility required")
+                Text("Allow Accessibility access")
                     .font(.system(size: 12, weight: .semibold))
-                Text("For tiling + focusing the right profile window. If it shows as ON, remove the old Polychrome row, then re-add this build.")
-                    .font(.system(size: 10))
+                Text("Needed to find open windows and tile them.")
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            Button {
+            Spacer(minLength: 4)
+            Button("Allow") {
                 _ = AXPermission.isTrusted(prompt: true)
                 AXPermission.openSystemSettings()
-            } label: {
-                Text("Grant").font(.system(size: 11, weight: .medium))
             }
             .controlSize(.small)
-            Button {
+            IconButton(systemName: "xmark", help: "Hide this banner", size: 10) {
                 settings.showAXBanner = false
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(4)
-                    .background(Circle().fill(Color.primary.opacity(0.08)))
             }
-            .buttonStyle(.plain)
-            .help("Hide this banner")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.10))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Color.orange.opacity(0.08))
+        .overlay(alignment: .bottom) { Divider() }
     }
 
-    // MARK: title
-
-    private var titleBar: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "rectangle.3.group.bubble.left.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.tint)
-            Text("Polychrome")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-            Spacer()
-            Button {
-                settings.pinned.toggle()
-            } label: {
-                Image(systemName: settings.pinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(settings.pinned ? Color.accentColor : .secondary)
-                    .rotationEffect(.degrees(settings.pinned ? 0 : 45))
+    private func updateBanner(_ version: String) -> some View {
+        Button {
+            dismiss()
+            updates.checkForUpdates()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tint)
+                Text("Polychrome \(version) is available")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text("Update…")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tint)
             }
-            .buttonStyle(.plain)
-            .animation(.easeOut(duration: 0.15), value: settings.pinned)
-            .help(settings.pinned
-                  ? "Unpin — menu closes when you click away"
-                  : "Pin on top — keep the menu open above other windows")
-            ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) && $0.isInstalled }), id: \.self) { b in
-                Image(systemName: b.symbolName)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color(b.accent))
-                    .help(b.displayName)
-            }
-            Text("\(loader.profiles.count)")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(Color.primary.opacity(0.08)))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
-    }
-
-    // MARK: search
-
-    private var searchBar: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-            TextField("Search profiles", text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .focused($searchFocused)
-                .onChange(of: query) { _ in focusedIndex = 0 }
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 11))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
-        )
-        .padding(.horizontal, 10)
-    }
-
-    private var multiToolbar: some View {
-        HStack(spacing: 6) {
-            Toggle(isOn: $multiMode) {
-                HStack(spacing: 4) {
-                    Image(systemName: multiMode ? "checkmark.square.fill" : "square.dashed")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text(multiMode ? "Selecting" : "Multi-select")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .toggleStyle(.button)
-            .controlSize(.small)
-            .onChange(of: multiMode) { newValue in
-                if !newValue { multiSelected.removeAll() }
-            }
-
-            if multiMode && !multiSelected.isEmpty {
-                Text("\(multiSelected.count)")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.accentColor))
-            }
-
-            Spacer()
-
-            Button {
-                loader.reload()
-                Task { await refreshOpenWindowsAsync() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Refresh profiles")
-        }
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        .buttonStyle(.plain)
+        .background(Color.accentColor.opacity(0.08))
+        .overlay(alignment: .top) { Divider() }
     }
 
     // MARK: list
 
-    private var profileList: some View {
-        ScrollViewReader { proxy in
+    private func profileList(_ secs: [MenuSection], ordered: [ChromeProfile]) -> some View {
+        // Index lookup built once per render (was a linear search per row).
+        let indexByID = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($1.id, $0) })
+        let focusedID = ordered.isEmpty ? nil : ordered[max(0, min(ordered.count - 1, focusedIndex))].id
+
+        return ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Color.clear.frame(height: 1).id("list-top")
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 6).id("list-top")
                     if let err = loader.lastError {
-                        Text(err)
+                        Label(err, systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 11))
                             .foregroundStyle(.red)
-                            .padding(.horizontal, 12)
+                            .padding(.horizontal, 14)
                             .padding(.vertical, 6)
                     }
-
-                    if filteredProfiles.isEmpty {
-                        HStack {
-                            Spacer()
-                            VStack(spacing: 4) {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(.tertiary)
-                                Text("No profiles match")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-                        .padding(.vertical, 28)
-                    } else {
-                        if settings.groupByStatus && !axTrusted {
-                            axNeededInline
-                        }
-                        listBody
+                    if settings.groupByStatus && !axTrusted && !secs.isEmpty {
+                        axNeededInline
                     }
+                    if secs.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(secs) { section in
+                            if let title = section.title {
+                                sectionHeader(title, browser: section.browser, count: section.profiles.count)
+                            }
+                            ForEach(section.profiles) { p in
+                                let idx = indexByID[p.id] ?? 0
+                                row(for: p, index: idx, focused: p.id == focusedID)
+                            }
+                        }
+                    }
+                    Color.clear.frame(height: 6)
                 }
-                .padding(.vertical, 5)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(minHeight: 260, maxHeight: 400)
+            .frame(height: listHeight)
             .onChange(of: focusedIndex) { idx in
-                let list = visibleOrdered
-                guard !list.isEmpty else { return }
-                let i = max(0, min(list.count - 1, idx))
-                proxy.scrollTo(list[i].id, anchor: nil)
+                let list = sections.flatMap(\.profiles)
+                // Only keyboard moves scroll; hover-driven focus is already on screen.
+                guard !list.isEmpty, Date() < hoverSuppressedUntil else { return }
+                proxy.scrollTo(list[max(0, min(list.count - 1, idx))].id, anchor: nil)
             }
             .onReceive(NotificationCenter.default.publisher(for: .polychromeMenuWillShow)) { _ in
                 // The popover view is reused between opens, so the scroll offset
@@ -370,128 +390,92 @@ struct MenuView: View {
         }
     }
 
-    @ViewBuilder
-    private var listBody: some View {
-        if settings.groupByStatus && axTrusted {
-            // Open profiles lead the whole list, whatever browser they belong to —
-            // burying an open Brave window under every closed Chrome profile made
-            // the most useful rows the hardest to reach.
-            let open = orderedByBrowser(filteredProfiles.filter { openWindowsByID[$0.id] == true })
-            let closed = filteredProfiles.filter { openWindowsByID[$0.id] != true }
-            if !open.isEmpty {
-                sectionHeader("OPEN", count: open.count, color: .green)
-                ForEach(open) { p in row(for: p) }
+    private var emptyState: some View {
+        VStack(spacing: 6) {
+            Image(systemName: query.isEmpty ? "person.crop.circle.badge.questionmark" : "magnifyingglass")
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(query.isEmpty ? "No profiles found" : "No profiles match “\(query)”")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            if query.isEmpty {
+                Text("Enable a browser in Settings → Browsers.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
             }
-            if !closed.isEmpty {
-                if !open.isEmpty {
-                    Divider().opacity(0.3).padding(.horizontal, 10).padding(.vertical, 3)
-                }
-                sectionHeader("CLOSED", count: closed.count, color: .secondary)
-                if settings.groupByBrowser {
-                    ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) }), id: \.self) { b in
-                        let group = closed.filter { $0.browser == b }
-                        if !group.isEmpty {
-                            browserHeader(b, count: group.count)
-                            ForEach(group) { p in row(for: p) }
-                        }
-                    }
-                } else {
-                    ForEach(closed) { p in row(for: p) }
-                }
-            }
-        } else if settings.groupByBrowser {
-            ForEach(Array(Browser.allCases.filter { settings.enabledBrowsers.contains($0) }), id: \.self) { b in
-                let group = filteredProfiles.filter { $0.browser == b }
-                if !group.isEmpty {
-                    browserHeader(b, count: group.count)
-                    ForEach(group) { p in row(for: p) }
-                }
-            }
-        } else {
-            ForEach(filteredProfiles) { p in row(for: p) }
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
     }
 
     private var axNeededInline: some View {
         HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 10))
-                .foregroundStyle(.orange)
-            Text("Grant Accessibility to detect open windows")
-                .font(.system(size: 10))
+            Image(systemName: "info.circle")
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            Spacer()
-            Button("Grant") {
+            Text("Allow Accessibility to see which profiles are open.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Button("Allow") {
                 _ = AXPermission.isTrusted(prompt: true)
                 AXPermission.openSystemSettings()
             }
             .controlSize(.mini)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Color.orange.opacity(0.08))
-        .padding(.horizontal, 4)
-        .padding(.bottom, 4)
+        .padding(.horizontal, 14)
+        .frame(height: 30)
     }
 
-    private func browserHeader(_ b: Browser, count: Int) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: b.symbolName)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color(b.accent))
-            Text(b.displayName.uppercased())
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(0.8)
+    private func sectionHeader(_ title: String, browser: Browser?, count: Int) -> some View {
+        HStack(spacing: 5) {
+            if let browser {
+                Image(systemName: browser.symbolName)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color(browser.accent))
+            }
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("\(count)")
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .font(.system(size: 11))
+                .monospacedDigit()
                 .foregroundStyle(.tertiary)
             Spacer()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.top, 8)
-        .padding(.bottom, 2)
-    }
-
-    private func sectionHeader(_ s: String, count: Int, color: Color) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 5, height: 5)
-            Text(s)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(0.8)
-                .foregroundStyle(.secondary)
-            Text("\(count)")
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
+        .frame(height: MenuMetrics.headerHeight, alignment: .bottom)
         .padding(.bottom, 2)
     }
 
     @ViewBuilder
-    private func row(for p: ChromeProfile) -> some View {
-        let visible = visibleOrdered
-        let focused = (visible.firstIndex(of: p) == focusedIndex)
-        let canClose = axTrusted && openWindowsByID[p.id] == true
+    private func row(for p: ChromeProfile, index: Int, focused: Bool) -> some View {
+        let open = isOpen(p)
         let wins = axTrusted ? (profileWindows[p.id] ?? []) : []
+        let shortcut: String? = index < 9 && !multiMode ? "⌘\(index + 1)" : nil
         ProfileRow(
             profile: p,
-            multiSelected: multiSelected.contains(p.id),
-            isOpen: openWindowsByID[p.id] == true,
+            selectionMode: multiMode,
+            selected: multiSelected.contains(p.id),
+            isOpen: open,
             showEmail: settings.showEmails,
+            showBrowserBadge: showsBrowserIdentity && !settings.groupByBrowser,
             tag: settings.tagsEnabled ? settings.tag(for: p) : .none,
-            kbdFocused: focused,
+            highlighted: focused,
             dropTargeted: dropTargetID == p.id,
+            shortcut: shortcut,
+            revealShortcut: commandHeld,
             windowCount: wins.count,
             windowAction: wins.isEmpty ? nil : { i in
                 if i < wins.count { focusWindow(wins[i]) }
             },
-            closeAction: canClose ? { closeWindows(of: p) } : nil
+            closeAction: axTrusted && open ? { closeWindows(of: p) } : nil,
+            onHover: { hoverFocus(index) }
         ) {
             handleTap(p)
         }
+        .frame(height: MenuMetrics.rowHeight)
         .padding(.horizontal, 6)
         // Drop target lives here, OUTSIDE ProfileRow's Button, so button
         // hit-testing can never shadow it. Covers the full row width.
@@ -505,23 +489,24 @@ struct MenuView: View {
             Button {
                 ChromeLauncher.launchOrFocus(profile: p)
                 dismissUnlessPinned()
-            } label: { Label("Open or focus", systemImage: "arrow.up.forward.square") }
+            } label: { Label("Open or Focus", systemImage: "arrow.up.forward.square") }
 
             Button {
                 ChromeLauncher.launch(profile: p)
                 dismissUnlessPinned()
-            } label: { Label("Force new window", systemImage: "plus.rectangle.on.rectangle") }
+            } label: { Label("New Window", systemImage: "plus.rectangle.on.rectangle") }
 
             Button {
                 ChromeLauncher.launchOrFocus(profile: p, incognito: true)
                 dismissUnlessPinned()
-            } label: { Label("Open incognito window", systemImage: "eyeglasses") }
+            } label: { Label("New Incognito Window", systemImage: "eyeglasses") }
 
-            if axTrusted && openWindowsByID[p.id] == true {
+            if axTrusted && open {
                 Divider()
                 Button {
                     closeWindows(of: p)
-                } label: { Label("Close window", systemImage: "xmark.circle") }
+                } label: { Label(wins.count > 1 ? "Close \(wins.count) Windows" : "Close Window",
+                                 systemImage: "xmark.circle") }
             }
 
             if settings.tagsEnabled {
@@ -532,7 +517,7 @@ struct MenuView: View {
                             settings.setTag(t, for: p)
                         } label: {
                             if t == .none {
-                                Label("Clear", systemImage: "xmark.circle")
+                                Label("No Tag", systemImage: "circle.slash")
                             } else {
                                 Label(t.displayName, systemImage: settings.tag(for: p) == t ? "checkmark.circle.fill" : "circle.fill")
                             }
@@ -543,6 +528,122 @@ struct MenuView: View {
         }
         .id(p.id)
     }
+
+    // MARK: footer
+
+    @ViewBuilder
+    private var footer: some View {
+        if multiMode { selectionFooter } else { standardFooter }
+    }
+
+    private var standardFooter: some View {
+        HStack(spacing: 6) {
+            FooterButton(title: "Select", systemName: "checkmark.circle",
+                         help: "Select several profiles to open or tile together") {
+                multiMode = true
+            }
+
+            Spacer()
+
+            if let hotkey = settings.activeHotkey {
+                KeyCap(hotkey.displayString)
+                    .help("Global shortcut — opens this menu from anywhere")
+            } else if settings.hotkey.enabled && settings.hotkeyRegistrationIssue != nil {
+                Button { openSettings(.shortcuts) } label: {
+                    Label("Shortcut unavailable", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .help("Open Settings to choose another global shortcut")
+            }
+
+            Menu {
+                Button("Settings…") { openSettings(nil) }
+                    .keyboardShortcut(",", modifiers: .command)
+                if updates.isAvailable {
+                    Button("Check for Updates…") {
+                        dismiss()
+                        updates.checkForUpdates()
+                    }
+                    .disabled(!updates.canCheckForUpdates)
+                }
+                Button("Refresh Profiles") { refresh() }
+                    .keyboardShortcut("r", modifiers: .command)
+                Divider()
+                Button("About Polychrome") { openSettings(.about) }
+                Button("Quit Polychrome") { NSApp.terminate(nil) }
+                    .keyboardShortcut("q", modifiers: .command)
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 13))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .padding(.leading, 4)
+            .help("Settings, updates and quit")
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 14)
+        .frame(height: 40)
+    }
+
+    private var selectionFooter: some View {
+        HStack(spacing: 8) {
+            Text(multiSelected.isEmpty ? "Select profiles" : "\(multiSelected.count) selected")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(multiSelected.isEmpty ? .secondary : .primary)
+                .monospacedDigit()
+
+            Spacer()
+
+            Button("Cancel") { resetMulti() }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 2)
+
+            Button {
+                let ids = multiSelected
+                ChromeLauncher.launchMany(profiles: loader.profiles.filter { ids.contains($0.id) })
+                resetMulti()
+                dismissUnlessPinned()
+            } label: {
+                Text("Open")
+            }
+            .controlSize(.small)
+            .disabled(multiSelected.isEmpty)
+
+            Button {
+                guard AXPermission.isTrusted(prompt: true) else {
+                    AXPermission.openSystemSettings()
+                    return
+                }
+                let ids = multiSelected
+                // Keep the user's selection order — it's the order windows tile in.
+                let profilesToTile = ids.compactMap { id in loader.profiles.first { $0.id == id } }
+                resetMulti()
+                dismissUnlessPinned()
+                Task { @MainActor in
+                    await WindowTiler.launchAndTile(profiles: profilesToTile, config: settings.layout)
+                }
+            } label: {
+                Label("Tile", systemImage: settings.layout.layout.icon)
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .disabled(multiSelected.count < 2 || !axTrusted)
+            .help(axTrusted ? "Arrange the selected profiles' windows side by side"
+                            : "Tiling needs Accessibility access")
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 40)
+        .background(Color.accentColor.opacity(0.06))
+    }
+
+    // MARK: actions
 
     /// Jump straight to one specific browser window (not a tab).
     ///
@@ -600,7 +701,12 @@ struct MenuView: View {
         dismissUnlessPinned()
     }
 
-    /// Close every window attributed to the profile, then re-scan so its green dot
+    private func refresh() {
+        loader.reload()
+        Task { await refreshOpenWindowsAsync() }
+    }
+
+    /// Close every window attributed to the profile, then re-scan so its open state
     /// clears. The menu stays open — closing is a management action, and the user may
     /// want to close several profiles in a row.
     private func closeWindows(of p: ChromeProfile) {
@@ -617,125 +723,12 @@ struct MenuView: View {
         }
     }
 
-    // MARK: action bar
-
-    private var multiActionBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Button {
-                    let ids = multiSelected
-                    let profilesToOpen = loader.profiles.filter { ids.contains($0.id) }
-                    ChromeLauncher.launchMany(profiles: profilesToOpen)
-                    resetMulti()
-                    dismissUnlessPinned()
-                } label: {
-                    Label("Open \(multiSelected.count)", systemImage: "square.and.arrow.up.on.square")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .disabled(multiSelected.isEmpty)
-                .controlSize(.small)
-                .buttonStyle(.bordered)
-
-                Button {
-                    guard AXPermission.isTrusted(prompt: true) else {
-                        AXPermission.openSystemSettings()
-                        return
-                    }
-                    let ids = multiSelected
-                    let profilesToOpen = loader.profiles.filter { ids.contains($0.id) }
-                    resetMulti()
-                    dismissUnlessPinned()
-                    Task { @MainActor in
-                        await WindowTiler.launchAndTile(profiles: profilesToOpen, config: settings.layout)
-                    }
-                } label: {
-                    Label("Side-by-side", systemImage: settings.layout.layout.icon)
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .disabled(multiSelected.count < 2 || !axTrusted)
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-
-                Spacer()
-
-                Button("Clear") { multiSelected.removeAll() }
-                    .controlSize(.small)
-                    .buttonStyle(.borderless)
-                    .disabled(multiSelected.isEmpty)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color.accentColor.opacity(0.07))
-    }
-
-    // MARK: footer
-
-    private var footer: some View {
-        HStack(spacing: 10) {
-            Button {
-                openSettings()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 12, weight: .medium))
-                    Text("Settings")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            if let hotkey = settings.activeHotkey {
-                Text(hotkey.displayString)
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.primary.opacity(0.14))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.primary.opacity(0.18), lineWidth: 0.5)
-                    )
-                    .help("Global hotkey")
-            } else if settings.hotkey.enabled && settings.hotkeyRegistrationIssue != nil {
-                Button { openSettings() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                        Text("Hotkey unavailable")
-                    }
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.orange)
-                }
-                .buttonStyle(.plain)
-                .help("Open Settings to retry the global hotkey")
-            }
-
-            Button {
-                NSApp.terminate(nil)
-            } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Quit Polychrome")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
     private func resetMulti() {
         multiSelected.removeAll()
         multiMode = false
     }
 
-    /// Pinned menus stay open after launching — refresh the open dots
+    /// Pinned menus stay open after launching — refresh the open state
     /// (after a beat, so the new window exists) instead of closing.
     private func dismissUnlessPinned() {
         if settings.pinned {
@@ -754,8 +747,8 @@ struct MenuView: View {
         // "Open" must mean "has a visible window," not "the browser process is holding this
         // profile's files open." Chrome keeps per-profile files open (sync, leveldb, extension
         // service workers, background apps) long after the last window of that profile closes,
-        // so lsof alone reports a closed profile as active — the phantom green dot that sticks
-        // at the top of OPEN and never clears. So we go per-browser:
+        // so lsof alone reports a closed profile as active — the phantom open state that sticks
+        // at the top of the list and never clears. So we go per-browser:
         //   • title-transparent (Chrome multi-profile): AX titles name every open window →
         //     trust them, skip lsof → closed profiles' leases can't create phantoms.
         //   • title-opaque WITH windows (Brave, single-profile Chrome): titles omit the
@@ -795,5 +788,86 @@ struct MenuView: View {
         openWindowsByID = dict
         profileWindows = result.scan.windowsByProfileID
         NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(trusted) windows=\(result.scan.windowByProfileID.count) tokens=\(result.scan.tokenMatchCount) active=\(result.activeByBrowser)")
+    }
+}
+
+// MARK: - small controls
+
+/// A borderless SF Symbol button with a hover wash, sized for the menu's chrome.
+struct IconButton: View {
+    let systemName: String
+    let help: String
+    var active: Bool = false
+    var size: CGFloat = 12
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(active ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.08 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// Text + symbol button for the footer, with the same hover wash as `IconButton`.
+struct FooterButton: View {
+    let title: String
+    let systemName: String
+    let help: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .frame(height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.08 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+    }
+}
+
+/// A keyboard-shortcut glyph drawn as a key cap.
+struct KeyCap: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .medium, design: .rounded))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 22, minHeight: 20)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+            )
     }
 }

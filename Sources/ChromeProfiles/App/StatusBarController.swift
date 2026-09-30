@@ -131,6 +131,10 @@ final class StatusBarController {
 
     func show() {
         guard let button = statusItem.button else { return }
+        // A popover inherits the menu bar's appearance (which follows the wallpaper),
+        // not NSApp.appearance — so the Light/Dark override in Settings never reached
+        // the menu. Pin it to the app's effective appearance on every open.
+        popover.appearance = NSApp.effectiveAppearance
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
