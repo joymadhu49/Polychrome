@@ -24,14 +24,17 @@ enum WindowTiler {
     // MARK: layout math
 
     static func frames(for count: Int, in screen: DisplayInfo, layout: LayoutConfig) -> [CGRect] {
+        let area = layout.avoidMenubar ? screen.visibleFrame : screen.frame
+        // AX uses global coords with the origin at the top-left of the primary display, Y growing
+        // down; NSScreen uses a bottom-left origin. Convert before laying out.
+        return frames(for: count, in: primaryFlipped(rect: area), layout: layout)
+    }
+
+    /// Pure layout geometry inside `baseRect`, which is already in top-left-origin coordinates.
+    /// No screen lookups — the Settings previews and the unit tests call this directly.
+    static func frames(for count: Int, in baseRect: CGRect, layout: LayoutConfig) -> [CGRect] {
         guard count > 0 else { return [] }
         let pad = layout.paddingPx
-        let area = layout.avoidMenubar ? screen.visibleFrame : screen.frame
-        // AX uses top-left origin in global coords with Y growing down? Actually AX uses screen coords with origin
-        // at top-left of primary display. NSScreen.frame uses bottom-left origin.
-        // Convert NSScreen rect to AX rect:
-        let axOriginY = primaryFlipped(rect: area).origin.y
-        let baseRect = CGRect(x: area.origin.x, y: axOriginY, width: area.width, height: area.height)
 
         let strategy: TileLayout = {
             switch layout.layout {

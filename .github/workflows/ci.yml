@@ -13,9 +13,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Swift version
         run: swift --version
@@ -31,5 +31,18 @@ jobs:
           set -euo pipefail
           test -x build/Polychrome.app/Contents/MacOS/Polychrome
           test -f build/Polychrome.app/Contents/Info.plist
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-            build/Polychrome.app/Contents/Info.plist
+          APP=build/Polychrome.app
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist"
+          # Universal: an arm64-only binary won't launch on Intel Macs, which
+          # macOS 13 (our minimum) still supports.
+          ARCHS=$(lipo -archs "$APP/Contents/MacOS/Polychrome")
+          echo "archs: $ARCHS"
+          [[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]]
+          # Sparkle embedded, resolvable, and every nested piece signed.
+          test -d "$APP/Contents/Frameworks/Sparkle.framework"
+          # (captured, not piped to grep -q: an early grep exit SIGPIPEs otool under pipefail)
+          LOADS=$(otool -l "$APP/Contents/MacOS/Polychrome")
+          [[ "$LOADS" == *'@executable_path/../Frameworks'* ]]
+          /usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist"
+          codesign --verify --deep --strict --verbose=2 "$APP"

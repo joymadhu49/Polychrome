@@ -18,6 +18,8 @@ A native macOS menubar app for managing Google Chrome profiles. Open profiles in
 - **Live profile refresh** — file system watch on Chrome's `Local State` updates the list when you add/edit profiles.
 - **Configurable display target** — tile on main display or any connected screen.
 - **Privacy toggle** — hide emails in the menu for screen-sharing.
+- **Keyboard-first** — ⌘1–⌘9 open the first nine profiles (hold ⌘ to see the numbers), ↑/↓ + ↩ for the rest.
+- **Automatic updates** — via [Sparkle](https://sparkle-project.org). A daily check against the latest GitHub release; every update is EdDSA-verified before it installs. The check is the only network request Polychrome makes and sends nothing about your profiles. Toggle it in **Settings → General**.
 
 ## Requirements
 
@@ -31,10 +33,10 @@ A native macOS menubar app for managing Google Chrome profiles. Open profiles in
 
 1. Grab the latest `.dmg` from the [Releases](https://github.com/joymadhu49/Polychrome/releases) page.
 2. Open the DMG and drag **Polychrome** into `/Applications`.
-3. Launch Polychrome. The icon appears in your menubar.
+3. Launch Polychrome. The icon appears in your menubar. From 1.5.0 on, updates arrive automatically — no more re-downloading the DMG.
 4. The first time you use *Side-by-side*, macOS will prompt for Accessibility access — grant it in **System Settings → Privacy & Security → Accessibility**.
 
-Release DMGs are **signed with a Developer ID certificate and notarized by Apple**, so they open normally — no "move to Trash" prompt and no right-click workaround.
+Release DMGs are **universal (Apple silicon + Intel), signed with a Developer ID certificate and notarized by Apple** — both the DMG and the app inside carry a stapled ticket, so they open normally, even offline.
 
 ### Build from source
 
@@ -54,12 +56,14 @@ Requires Swift 5.9+ (ships with Xcode 15 or Command Line Tools).
 | Open menu | Click menubar icon, or press your global hotkey (default ⌘⇧C) |
 | Launch / focus a profile | Click any profile row |
 | Open a link in a profile | Drag the link over the menubar icon, then drop it directly on a profile row |
-| Select multiple | Toggle **Multi-select**, then click profiles |
-| Tile side-by-side | After selecting 2+, click **Side-by-side** |
-| Refresh profiles | Click the refresh icon next to the toolbar |
-| Change layout | **Settings → Side-by-Side** |
-| Rebind hotkey | **Settings → Hotkeys**, click the recorder, press your combo |
-| Hide emails | **Settings → Appearance** |
+| Open profile 1–9 | ⌘1 … ⌘9 while the menu is open (hold ⌘ to see the numbers) |
+| Select multiple | Click **Select** in the footer, then click profiles |
+| Tile side-by-side | After selecting 2+, click **Tile** — the first profile you pick gets the main pane |
+| Refresh profiles | ⌘R, or the ⚙︎ menu in the footer |
+| Change layout | **Settings → Tiling** |
+| Rebind hotkey | **Settings → Shortcuts**, click the field, press your combo |
+| Hide emails | **Settings → Menu** |
+| Check for updates | ⚙︎ menu → **Check for Updates…**, or **Settings → General** |
 
 ## Why it isn't broken when Chrome already runs
 
@@ -72,8 +76,8 @@ Detection parses Chrome's **Accessibility** window title, which — unlike the A
 ```
 Sources/ChromeProfiles/
 ├── App/
-│   ├── ChromeProfilesApp.swift     @main + Settings scene placeholder
-│   ├── AppDelegate.swift           Wires StatusBarController + Settings window
+│   ├── ChromeProfilesApp.swift     @main — plain AppKit entry point (no SwiftUI scenes)
+│   ├── AppDelegate.swift           Wires StatusBarController, Settings window, hidden Edit menu
 │   └── StatusBarController.swift   NSStatusItem + NSPopover host
 ├── Models/
 │   ├── Browser.swift               Supported Chromium browsers (Chrome, Brave)
@@ -90,12 +94,13 @@ Sources/ChromeProfiles/
 │   ├── BrowserActivity.swift       lsof-based "which profiles are live" fallback
 │   ├── HotkeyManager.swift         Carbon RegisterEventHotKey
 │   ├── LaunchAtLogin.swift         SMAppService.mainApp
+│   ├── UpdateController.swift      Sparkle updater + gentle in-menu update reminder
 │   ├── AXPermission.swift          AXIsProcessTrustedWithOptions
 │   └── DisplayService.swift        NSScreen enumeration
 └── Views/
-    ├── MenuView.swift              Popover root (search, list, multi-action, footer)
-    ├── ProfileRow.swift            Avatar + name + email + open-state dot
-    ├── SettingsView.swift          NavigationSplitView with 5 panes
+    ├── MenuView.swift              Popover root (search header, sectioned list, footer / selection bar)
+    ├── ProfileRow.swift            Avatar with presence dot, name, tag, window boxes, shortcut hint
+    ├── SettingsView.swift          System Settings-style grouped Form, 7 panes
     └── HotkeyRecorder.swift        NSEvent local monitor capture
 ```
 
@@ -128,10 +133,17 @@ bash scripts/make-dmg.sh
 ## Releasing (signed + notarized)
 
 Releases are **fully automatic** (`.github/workflows/release.yml`): merge a change to
-`main` that bumps `CFBundleShortVersionString` in `Bundle/Info.plist`, and CI builds,
-Developer ID-signs, notarizes, staples, creates the `v<version>` tag, and publishes the
-GitHub Release with the DMG attached. No tag pushing, no manual steps — a push to `main`
-without a version bump releases nothing.
+`main` that bumps `CFBundleShortVersionString` **and** `CFBundleVersion` in
+`Bundle/Info.plist`, and CI builds a universal binary, Developer ID-signs it, notarizes
+and staples the app, wraps it in a DMG, notarizes and staples that, signs the DMG for
+Sparkle, and publishes the `v<version>` GitHub Release with the DMG and `appcast.xml`.
+No tag pushing, no manual steps — a push to `main` without a version bump releases nothing.
+
+**Auto-update feed.** `SUFeedURL` points at
+`releases/latest/download/appcast.xml`, which GitHub redirects to the newest release —
+so publishing a release *is* publishing the update. Sparkle compares `CFBundleVersion`
+(an integer, +1 per release); the release job refuses to run if you forget to bump it,
+because such a release would never be offered to anyone.
 
 Manual overrides still work: push a `v*` tag, or run the workflow from the Actions tab
 (optionally with a `release_tag` input).
@@ -146,13 +158,19 @@ One-time setup — add these repository secrets (**Settings → Secrets and vari
 | `AC_API_KEY_P8` | base64 of your App Store Connect API key (`.p8`) |
 | `AC_API_KEY_ID` | the API Key ID |
 | `AC_API_ISSUER_ID` | the API Issuer ID |
+| `SPARKLE_ED_PRIVATE_KEY` | Sparkle's EdDSA private key — `.build/artifacts/sparkle/Sparkle/bin/generate_keys -x key.txt`. Its public half is `SUPublicEDKey` in `Bundle/Info.plist`. **Back it up: losing it strands every installed copy.** |
+
+If any secret is missing, the run stays green and lists what's missing in the job
+summary instead of building.
 
 To sign + notarize **locally** instead, see the header of `scripts/notarize.sh`:
 
 ```bash
 POLYCHROME_SIGNING_IDENTITY="Developer ID Application" bash scripts/build.sh
+AC_KEYCHAIN_PROFILE=polychrome-notary bash scripts/notarize.sh build/Polychrome.app   # staple the app
 bash scripts/make-dmg.sh
-AC_KEYCHAIN_PROFILE=polychrome-notary bash scripts/notarize.sh
+AC_KEYCHAIN_PROFILE=polychrome-notary bash scripts/notarize.sh                        # staple the DMG
+bash scripts/make-appcast.sh   # signs with the key in your login keychain
 ```
 
 ## Regenerating the icon
