@@ -3,7 +3,7 @@ import ApplicationServices
 @testable import ChromeProfiles
 
 final class WindowAttributionTests: XCTestCase {
-    private func profile(_ browser: Browser = .chrome, _ dir: String, name: String, given: String? = nil) -> ChromeProfile {
+    private func profile(_ dir: String, name: String, given: String? = nil, browser: Browser = .chrome) -> ChromeProfile {
         ChromeProfile(browser: browser, dirName: dir, displayName: name, email: nil, givenName: given, avatarImage: nil)
     }
 
@@ -101,7 +101,7 @@ final class WindowAttributionTests: XCTestCase {
     // MARK: title-opaque browsers
 
     func testSingleProfileOpaqueBrowserOwnsEveryWindow() {
-        let only = profile(.brave, "Default", name: "Me")
+        let only = profile("Default", name: "Me", browser: .brave)
         let result = WindowFinder.attribute(titles: ["GitHub - Brave", "News - Brave", "Docs - Brave"],
                                             browser: .brave, profiles: [only])
         XCTAssertEqual(result.indicesByProfileID, [only.id: [0, 1, 2]])
@@ -109,16 +109,16 @@ final class WindowAttributionTests: XCTestCase {
     }
 
     func testMultiProfileOpaqueBrowserCantAttributeFromTitles() {
-        let a = profile(.brave, "Default", name: "Me")
-        let b = profile(.brave, "Profile 1", name: "Work")
+        let a = profile("Default", name: "Me", browser: .brave)
+        let b = profile("Profile 1", name: "Work", browser: .brave)
         let result = WindowFinder.attribute(titles: ["GitHub - Brave"], browser: .brave, profiles: [a, b])
         XCTAssertEqual(result.indicesByProfileID, [:])
         XCTAssertEqual(result.unattributed, [0])
     }
 
     func testOtherBrowsersProfilesAreIgnored() {
-        let chrome = profile(.chrome, "Default", name: "Me")
-        let brave = profile(.brave, "Default", name: "Me")
+        let chrome = profile("Default", name: "Me")
+        let brave = profile("Default", name: "Me", browser: .brave)
         let result = WindowFinder.attribute(titles: ["GitHub - Brave"], browser: .brave, profiles: [chrome, brave])
         XCTAssertEqual(result.indicesByProfileID, [brave.id: [0]])
     }
@@ -135,8 +135,8 @@ final class WindowAttributionTests: XCTestCase {
     }
 
     func testLoneWindowGoesToTheOnlyLiveProfile() {
-        let a = profile(.brave, "Default", name: "Me")
-        let b = profile(.brave, "Profile 1", name: "Work")
+        let a = profile("Default", name: "Me", browser: .brave)
+        let b = profile("Profile 1", name: "Work", browser: .brave)
         var scan = loneWindowScan(.brave)
         scan.applyActivity(["Profile 1"], browser: .brave, profiles: [a, b])
         XCTAssertEqual(scan.windowsByProfileID[b.id]?.count, 1)
@@ -146,8 +146,8 @@ final class WindowAttributionTests: XCTestCase {
 
     /// A closed profile whose files Chrome still holds open must not claim a live sibling's window.
     func testLoneWindowIsNobodysWhenSeveralProfilesLookLive() {
-        let a = profile(.brave, "Default", name: "Me")
-        let b = profile(.brave, "Profile 1", name: "Work")
+        let a = profile("Default", name: "Me", browser: .brave)
+        let b = profile("Profile 1", name: "Work", browser: .brave)
         var scan = loneWindowScan(.brave)
         scan.applyActivity(["Default", "Profile 1"], browser: .brave, profiles: [a, b])
         XCTAssertTrue(scan.windowsByProfileID.isEmpty)
