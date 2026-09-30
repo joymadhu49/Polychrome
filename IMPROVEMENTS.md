@@ -18,6 +18,36 @@ compiles and bundles — the baseline for every item below.
 
 ## Shipped
 
+- [x] **One window→profile rule set for the whole app** — the menu, focusing, closing and
+  tiling each attributed windows their own way and disagreed. All now go through
+  `WindowFinder.snapshot`, with the title rules as a pure, unit-tested function
+  (`WindowAttributionTests`). Fixes three wrong-window bugs: (post-v1.5.0)
+  - clicking a closed profile could focus a *different* profile's lone window, because
+    Chrome keeps a closed profile's files open and lsof called it "active" — lsof no longer
+    overrides browsers whose titles name their profiles;
+  - tiling A + B while an unselected profile C had one window moved C's window into B's slot
+    instead of launching B — windows are now attributed against every profile, and a window
+    naming someone else is never handed to a closed profile;
+  - "Close N Windows" did nothing in Brave / single-profile Chrome with 2+ windows — it now
+    closes exactly the windows the row lists.
+- [x] **Tiling waits for cold launches** — launched windows were given ~2 s to appear, so a
+  cold Chrome start usually tiled without them. Now up to 10 s (ends as soon as all appear);
+  title-opaque browsers pair windows that appeared after launching with the launched
+  profiles; minimized windows are restored first; frames are set size → position → size so
+  moves between displays land exactly; all AX work is off the main thread. (post-v1.5.0)
+- [x] **Launch at login reflects reality** — the toggle was a stored flag that stayed "on"
+  after a failed registration or a change in System Settings; it now mirrors
+  `SMAppService`, and shows when macOS is waiting for approval in Login Items. (post-v1.5.0)
+- [x] **Global shortcuts can't hijack typing** — Shift alone (⇧A, ⇧`) is rejected at record
+  time except on F-keys; the recorder says what's missing. Saved shortcuts keep working.
+  (post-v1.5.0)
+- [x] **Smaller fixes** (post-v1.5.0): profile names containing parentheses ("Work (old)")
+  now match their windows; ⌘1–⌘9 use physical keys so they work on AZERTY and other
+  layouts; "Main display" means the display with the menu bar, not wherever the menu was;
+  `lsof` runs with `-n -P -Fn` (no DNS lookups) and is skipped for single-profile browsers;
+  the menu's live-refresh timer no longer restarts on every render; the first open no
+  longer reloads twice; dead URL-era code removed.
+
 - [x] **Auto-updates via Sparkle** — daily check against the appcast attached to the
   newest GitHub release; every DMG is EdDSA-signed in CI and verified before install.
   Scheduled updates found mid-work show as a quiet "Update available" row in the menu
@@ -116,11 +146,11 @@ compiles and bundles — the baseline for every item below.
   ↑/↓, ↩ and ⌘1–9. Clicking the menubar icon works. Fix: host the menu in a
   non-activating `NSPanel` (how Raycast/Alfred/Spotlight do it) instead of `NSPopover`.
   Present in 1.4.x too.
-- [ ] **More unit tests for the pure logic.** `WindowTiler.frames` is covered now
-  (`WindowTilerFramesTests`); still missing: the AX title parser (`WindowFinder.profileToken` — needs to become internal
-  or move to a testable type), profile sorting in `ChromeProfileLoader`, and
-  `HotkeyConfig.displayString` are all pure functions begging for a test target
-  in `Package.swift`. Run them in the CI job (`swift test`).
+- [ ] **More unit tests for the pure logic.** `WindowTiler.frames`
+  (`WindowTilerFramesTests`), the AX title parser and window attribution
+  (`WindowAttributionTests`) and `HotkeyConfig.displayString` (`HotkeyConfigTests`) are
+  covered; still missing: profile sorting in `ChromeProfileLoader` (needs the `sorted`
+  helper to become internal).
 - [ ] **Localized-Chrome window detection.** Profile matching parses the English
   AX title format (`"<page> - Google Chrome - <name>"`). On non-English systems
   the app-name label or separator may differ, silently degrading everyone to the
@@ -130,7 +160,8 @@ compiles and bundles — the baseline for every item below.
   (Brave, single-profile Chrome) trigger a synchronous `lsof` every 2.5 s
   refresh. On machines with many open files this can take hundreds of ms of a
   background thread and burn CPU. Consider caching results between refreshes,
-  scanning only when window count changes, or a cheaper signal.
+  scanning only when window count changes, or a cheaper signal. (Partly done: lsof now
+  skips DNS/port lookups and only runs for title-opaque browsers with 2+ profiles.)
 
 ## Medium priority
 

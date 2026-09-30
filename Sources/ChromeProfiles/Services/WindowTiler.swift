@@ -5,16 +5,27 @@ import ApplicationServices
 enum WindowTiler {
     // MARK: AX helpers
 
+    /// Size, move, then size again: macOS clamps a window to the display it's on, so moving a
+    /// large window onto a smaller display (or a small one onto a larger) needs the second pass
+    /// to land at exactly `frame`. The window must not be minimized — see `restoreIfMinimized`.
     static func setFrame(_ window: AXUIElement, frame: CGRect) {
         var pos = frame.origin
         var size = frame.size
-        if let posVal = AXValueCreate(.cgPoint, &pos) {
-            AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
-        }
-        if let sizeVal = AXValueCreate(.cgSize, &size) {
-            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeVal)
-        }
+        guard let posVal = AXValueCreate(.cgPoint, &pos),
+              let sizeVal = AXValueCreate(.cgSize, &size) else { return }
+        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeVal)
+        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
+        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeVal)
+    }
+
+    /// A minimized window ignores moves and resizes, and restoring it afterwards would put it
+    /// back at its old frame. Returns true when the window was minimized and is now restoring.
+    static func restoreIfMinimized(_ window: AXUIElement) -> Bool {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &raw) == .success,
+              (raw as? Bool) == true else { return false }
         AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        return true
     }
 
     static func raise(_ window: AXUIElement) {
@@ -172,52 +183,90 @@ enum WindowTiler {
 
     // MARK: launch-and-tile orchestration
 
-    /// Reuse existing Chrome windows where possible; parallel-launch missing ones; then tile.
-    /// If `url` provided, opens that URL in each profile (new tab in existing window, or new window if none).
+    /// How long to wait for launched profiles' windows. A cold browser start routinely takes
+    /// several seconds; the wait ends as soon as every window has been found.
+    static let launchTimeout: TimeInterval = 10
+
+    /// Reuse existing windows where possible, launch the missing profiles in parallel, then tile
+    /// in `profiles` order. `all` is every known profile: windows are attributed against all of
+    /// them, so a window whose title names an unselected profile never stands in for a selected one.
     @MainActor
-    static func launchAndTile(profiles: [ChromeProfile], config: LayoutConfig, url: String? = nil) async {
+    static func launchAndTile(profiles: [ChromeProfile], among all: [ChromeProfile], config: LayoutConfig) async {
         guard !profiles.isEmpty else { return }
+        var known = all
+        for p in profiles where !known.contains(where: { $0.id == p.id }) { known.append(p) }
+        let everyone = known
 
-        var resolved: [String: AXUIElement] = WindowFinder.allWindowsMappedToProfiles(profiles)
+        // AX enumeration and lsof are synchronous IPC — keep them off the main thread.
+        let initial = await Task.detached(priority: .userInitiated) {
+            WindowFinder.snapshot(everyone).scan
+        }.value
+        var resolved: [String: AXUIElement] = [:]
+        for p in profiles {
+            if let w = initial.windowsByProfileID[p.id]?.first { resolved[p.id] = w.element }
+        }
         let needLaunch = profiles.filter { resolved[$0.id] == nil }
+        NSLog("[Polychrome] tile: \(resolved.count) existing, \(needLaunch.count) to launch")
 
-        NSLog("[Polychrome] tile: \(resolved.count) existing, \(needLaunch.count) to launch (url=\(url ?? "-"))")
-
-        // For URL mode: also send URL to profiles with existing windows (opens new tab)
-        if let url, !url.isEmpty {
-            for p in profiles where resolved[p.id] != nil {
-                ChromeLauncher.launch(profile: p, url: url)
-            }
-        }
-
-        // Parallel launch missing (with URL if given)
-        for p in needLaunch {
-            ChromeLauncher.launch(profile: p, url: url)
-        }
+        for p in needLaunch { ChromeLauncher.launch(profile: p) }
 
         if !needLaunch.isEmpty {
-            for _ in 0..<40 {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                let map = WindowFinder.allWindowsMappedToProfiles(profiles)
-                for (k, v) in map where resolved[k] == nil {
-                    resolved[k] = v
+            // Every window that existed before launching, so the new ones can be told apart.
+            let preexisting = (initial.windowsByProfileID.values.flatMap { $0 }
+                               + initial.unattributed.values.flatMap { $0 }).map(\.element)
+            let deadline = Date().addingTimeInterval(launchTimeout)
+            while resolved.count < profiles.count, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                let scan = await Task.detached(priority: .userInitiated) {
+                    WindowFinder.scanWindows(everyone)
+                }.value
+                for p in needLaunch where resolved[p.id] == nil {
+                    if let w = scan.windowsByProfileID[p.id]?.first { resolved[p.id] = w.element }
                 }
-                if resolved.count >= profiles.count { break }
+                pairNewWindows(in: scan, launched: needLaunch, preexisting: preexisting, resolved: &resolved)
             }
-        } else if url != nil {
-            // Give Chrome a beat to open the new tab so the window settles before we move it
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            let missing = profiles.filter { resolved[$0.id] == nil }.map(\.id)
+            if !missing.isEmpty {
+                NSLog("[Polychrome] tile: no window found for \(missing) within \(Int(launchTimeout)) s")
+            }
         }
 
         let ordered: [AXUIElement] = profiles.compactMap { resolved[$0.id] }
         guard !ordered.isEmpty else { return }
 
         let screen = DisplayService.screen(for: config.displayID)
-        let frames = WindowTiler.frames(for: ordered.count, in: screen, layout: config)
+        let placements = Array(zip(ordered, frames(for: ordered.count, in: screen, layout: config)))
 
-        for (idx, win) in ordered.enumerated() where idx < frames.count {
-            setFrame(win, frame: frames[idx])
-            raise(win)
+        let restoring = await Task.detached(priority: .userInitiated) { () -> Bool in
+            var any = false
+            for (win, _) in placements where restoreIfMinimized(win) { any = true }
+            return any
+        }.value
+        // Let the un-minimize animation finish; it would otherwise land on the old frame after ours.
+        if restoring { try? await Task.sleep(nanoseconds: 450_000_000) }
+
+        await Task.detached(priority: .userInitiated) {
+            for (win, frame) in placements {
+                setFrame(win, frame: frame)
+                raise(win)
+            }
+        }.value
+    }
+
+    /// Title-opaque browsers (e.g. Brave with several profiles) never name their windows, but a
+    /// window that appeared after launching can only belong to a launched profile. Pair them once
+    /// every launch in that browser has surfaced — all the right windows get tiled, though with
+    /// several launches in one such browser, which window takes which slot can't be known.
+    private static func pairNewWindows(in scan: WindowFinder.WindowScan, launched: [ChromeProfile],
+                                       preexisting: [AXUIElement], resolved: inout [String: AXUIElement]) {
+        for browser in Set(launched.map(\.browser)) where scan.isTitleOpaque(browser) {
+            let waiting = launched.filter { $0.browser == browser && resolved[$0.id] == nil }
+            let taken = Array(resolved.values)
+            let fresh = (scan.unattributed[browser] ?? []).map(\.element).filter { w in
+                !preexisting.contains { CFEqual($0, w) } && !taken.contains { CFEqual($0, w) }
+            }
+            guard !waiting.isEmpty, fresh.count >= waiting.count else { continue }
+            for (p, w) in zip(waiting, fresh) { resolved[p.id] = w }
         }
     }
 }

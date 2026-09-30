@@ -95,6 +95,26 @@ final class HotkeyConfigTests: XCTestCase {
         }
     }
 
+    func testGlobalChordNeedsCommandOptionOrControl() {
+        for mods in [cmdKey, optionKey, controlKey, cmdKey | shiftKey, controlKey | optionKey] {
+            XCTAssertTrue(HotkeyConfig.isAllowedGlobalChord(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(mods)),
+                          "modifiers \(mods)")
+        }
+    }
+
+    func testShiftAloneIsRejectedOnKeysThatType() {
+        for key in [kVK_ANSI_A, kVK_ANSI_1, kVK_ANSI_Grave, kVK_Space, kVK_LeftArrow, kVK_Return] {
+            XCTAssertFalse(HotkeyConfig.isAllowedGlobalChord(keyCode: UInt32(key), modifiers: UInt32(shiftKey)),
+                           "key code \(key)")
+        }
+        XCTAssertFalse(HotkeyConfig.isAllowedGlobalChord(keyCode: UInt32(kVK_ANSI_A), modifiers: 0))
+    }
+
+    func testShiftAloneIsAllowedOnFunctionKeys() {
+        XCTAssertTrue(HotkeyConfig.isAllowedGlobalChord(keyCode: UInt32(kVK_F5), modifiers: UInt32(shiftKey)))
+        XCTAssertFalse(HotkeyConfig.isAllowedGlobalChord(keyCode: UInt32(kVK_F5), modifiers: 0))
+    }
+
     func testLegacyShiftedPunctuationUsesTypedSymbols() {
         let cases: [(Int, String)] = [
             (kVK_ANSI_1, "!"), (kVK_ANSI_2, "@"), (kVK_ANSI_3, "#"),

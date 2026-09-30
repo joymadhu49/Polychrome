@@ -106,11 +106,11 @@ Sources/ChromeProfiles/
 
 ## How tiling works
 
-1. `WindowTiler.launchAndTile(profiles:, config:)` is called with a selected set.
-2. `WindowFinder.allWindowsMappedToProfiles` resolves which already exist via AX title match.
+1. `WindowTiler.launchAndTile(profiles:, among:, config:)` is called with the selected set plus every known profile.
+2. `WindowFinder.snapshot` resolves which already have a window, attributing windows against *all* profiles so a window naming an unselected profile never stands in for a selected one. The menu, focusing and closing use the same snapshot, so they always agree.
 3. Missing profiles are launched **in parallel** via `open -na`.
-4. The window list is polled every 50 ms (up to ~2 s) until all profiles resolve.
-5. Frames are computed for the chosen layout on the chosen display, then `kAXPositionAttribute` and `kAXSizeAttribute` are set per window.
+4. The window list is polled every 150 ms (up to 10 s — a cold browser start takes a few seconds) until all profiles resolve. In title-opaque browsers, windows that appeared after launching are paired with the launched profiles.
+5. Frames are computed for the chosen layout on the chosen display; minimized windows are restored first, then each window is sized, moved and sized again (so moving between displays of different sizes lands exactly).
 
 Coordinate note: AX uses top-left origin on the primary display, while `NSScreen` uses bottom-left. `WindowTiler.primaryFlipped` handles the conversion.
 
@@ -118,7 +118,7 @@ Coordinate note: AX uses top-left origin on the primary display, while `NSScreen
 
 | Path | Purpose |
 |---|---|
-| `~/Library/Preferences/com.joymadhu.polychrome.plist` | UserDefaults: launchAtLogin, showEmails, focusExisting, hotkey, layout |
+| `~/Library/Preferences/com.joymadhu.polychrome.plist` | UserDefaults: showEmails, focusExisting, hotkey, layout (launch at login is read from the system's Login Items) |
 | `~/Library/Application Support/Google/Chrome/Local State` | Read-only: source of profile metadata |
 
 Polychrome never writes to Chrome's data.

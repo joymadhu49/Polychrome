@@ -89,10 +89,14 @@ struct SettingsView: View {
             .navigationTitle(router.pane.title)
         }
         .frame(width: 720, height: 540)
-        .onAppear { axTrusted = AXPermission.isTrusted() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            // Coming back from System Settings is the moment the grant usually changes.
+        .onAppear {
             axTrusted = AXPermission.isTrusted()
+            settings.refreshLaunchAtLogin()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Coming back from System Settings is the moment the grant (or a login item) usually changes.
+            axTrusted = AXPermission.isTrusted()
+            settings.refreshLaunchAtLogin()
         }
     }
 
@@ -103,7 +107,17 @@ struct SettingsView: View {
             Section {
                 Toggle(isOn: $settings.launchAtLogin) {
                     SettingLabel("Launch at login",
-                                 "Start Polychrome automatically when you log in.")
+                                 settings.launchAtLoginNeedsApproval
+                                     ? "Waiting for your approval in System Settings → General → Login Items."
+                                     : "Start Polychrome automatically when you log in.")
+                }
+                if settings.launchAtLoginNeedsApproval {
+                    LabeledContent {
+                        Button("Open Login Items…") { LaunchAtLogin.openSystemSettings() }
+                    } label: {
+                        Label("macOS needs you to allow Polychrome", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
                 }
                 Toggle(isOn: $settings.focusExisting) {
                     SettingLabel("Focus existing windows",
@@ -355,7 +369,7 @@ struct SettingsView: View {
             } header: {
                 Text("Global")
             } footer: {
-                Text("Click the field, then press the keys. A shortcut needs at least one modifier (⌘ ⌥ ⌃ ⇧).")
+                Text("Click the field, then press the keys. A shortcut needs ⌘, ⌥ or ⌃ so it can’t take over normal typing; Shift alone works only with F1–F20.")
                     .settingsFootnote()
             }
 

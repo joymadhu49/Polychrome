@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox
 import UniformTypeIdentifiers
 
 /// One titled run of rows in the menu. The list and keyboard navigation both read
@@ -38,7 +39,23 @@ struct MenuView: View {
     @State private var commandHeld: Bool = false
     @State private var hoverSuppressedUntil: Date = .distantPast
     @State private var dropTargetID: String?       // row currently hovered by a URL drag
+    @State private var lastOpenHandled: Date = .distantPast
     @FocusState private var searchFocused: Bool
+
+    /// Created once with the view (the popover reuses it), not in `body`: a publisher built
+    /// during every render is resubscribed on every render, which restarts the countdown.
+    private let refreshTimer = Timer.publish(every: 2.5, on: .main, in: .common).autoconnect()
+
+    /// ⌘1–⌘9 by physical key, so they work on layouts where the number row types other
+    /// characters without Shift (AZERTY types & é " ' …).
+    private static let digitKeyCodes: [UInt16: Int] = [
+        UInt16(kVK_ANSI_1): 1, UInt16(kVK_ANSI_2): 2, UInt16(kVK_ANSI_3): 3,
+        UInt16(kVK_ANSI_4): 4, UInt16(kVK_ANSI_5): 5, UInt16(kVK_ANSI_6): 6,
+        UInt16(kVK_ANSI_7): 7, UInt16(kVK_ANSI_8): 8, UInt16(kVK_ANSI_9): 9,
+        UInt16(kVK_ANSI_Keypad1): 1, UInt16(kVK_ANSI_Keypad2): 2, UInt16(kVK_ANSI_Keypad3): 3,
+        UInt16(kVK_ANSI_Keypad4): 4, UInt16(kVK_ANSI_Keypad5): 5, UInt16(kVK_ANSI_Keypad6): 6,
+        UInt16(kVK_ANSI_Keypad7): 7, UInt16(kVK_ANSI_Keypad8): 8, UInt16(kVK_ANSI_Keypad9): 9,
+    ]
 
     // MARK: data
 
@@ -124,40 +141,48 @@ struct MenuView: View {
             footer
         }
         .frame(width: MenuMetrics.width)
-        .task {
-            axTrusted = AXPermission.isTrusted()
-            menuVisible = true
-            loader.reload()
-            await refreshOpenWindowsAsync()
-            installKeyMonitor()
-            focusSearch()
-        }
+        // The first open can deliver both the show notification and `.task` (the notification
+        // may be posted before this view has subscribed); later opens reuse the popover and only
+        // get the notification. `menuDidOpen` runs once for either.
+        .task { menuDidOpen() }
         .onReceive(NotificationCenter.default.publisher(for: .polychromeMenuWillShow)) { _ in
-            axTrusted = AXPermission.isTrusted()
-            menuVisible = true
-            loader.reload()
-            query = ""            // fresh start on every open, like Spotlight
-            focusedIndex = 0
-            commandHeld = false
-            // Rows appearing under a resting pointer fire hover-enter; the first row
-            // should stay highlighted until the mouse actually moves.
-            hoverSuppressedUntil = Date().addingTimeInterval(0.5)
-            installKeyMonitor()   // reused popover may not re-run .task; ensure arrow/return nav is live
-            focusSearch()
-            Task { await refreshOpenWindowsAsync() }
+            menuDidOpen()
         }
         // Live-refresh the open state while the menu is showing, so closing a window
         // (or one that finishes launching) updates without a manual refresh.
         // No-op while hidden — the reused popover keeps this view alive between opens.
-        .onReceive(Timer.publish(every: 2.5, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(refreshTimer) { _ in
             guard menuVisible else { return }
             Task { await refreshOpenWindowsAsync() }
         }
         .onDisappear {
             menuVisible = false
+            lastOpenHandled = .distantPast   // a quick close-and-reopen is a new open
             commandHeld = false
             removeKeyMonitor()
         }
+    }
+
+    // MARK: opening
+
+    /// Fresh state for every open, like Spotlight. Deduplicated so the first open's
+    /// `.task` + notification pair reloads and rescans once, not twice.
+    private func menuDidOpen() {
+        let now = Date()
+        guard now.timeIntervalSince(lastOpenHandled) > 0.5 else { return }
+        lastOpenHandled = now
+        axTrusted = AXPermission.isTrusted()
+        menuVisible = true
+        loader.reload()
+        query = ""
+        focusedIndex = 0
+        commandHeld = false
+        // Rows appearing under a resting pointer fire hover-enter; the first row
+        // should stay highlighted until the mouse actually moves.
+        hoverSuppressedUntil = now.addingTimeInterval(0.5)
+        installKeyMonitor()
+        focusSearch()
+        Task { await refreshOpenWindowsAsync() }
     }
 
     // MARK: keyboard
@@ -181,12 +206,13 @@ struct MenuView: View {
                 return event
             }
             let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            if mods == .command, let n = Self.digitKeyCodes[event.keyCode] {
+                let list = sections.flatMap(\.profiles)
+                if n <= list.count { handleTap(list[n - 1]) }
+                return nil
+            }
             if mods == .command, let ch = event.charactersIgnoringModifiers {
                 switch ch {
-                case "1"..."9":
-                    let list = sections.flatMap(\.profiles)
-                    if let n = Int(ch), n <= list.count { handleTap(list[n - 1]) }
-                    return nil
                 case ",":
                     openSettings(nil)
                     return nil
@@ -470,7 +496,8 @@ struct MenuView: View {
             windowAction: wins.isEmpty ? nil : { i in
                 if i < wins.count { focusWindow(wins[i]) }
             },
-            closeAction: axTrusted && open ? { closeWindows(of: p) } : nil,
+            // Only offer ✕ for windows the row can actually name — the same set it closes.
+            closeAction: wins.isEmpty ? nil : { closeWindows(of: p) },
             onHover: { hoverFocus(index) }
         ) {
             handleTap(p)
@@ -487,7 +514,7 @@ struct MenuView: View {
         }
         .contextMenu {
             Button {
-                ChromeLauncher.launchOrFocus(profile: p)
+                ChromeLauncher.launchOrFocus(profile: p, among: loader.profiles)
                 dismissUnlessPinned()
             } label: { Label("Open or Focus", systemImage: "arrow.up.forward.square") }
 
@@ -497,11 +524,11 @@ struct MenuView: View {
             } label: { Label("New Window", systemImage: "plus.rectangle.on.rectangle") }
 
             Button {
-                ChromeLauncher.launchOrFocus(profile: p, incognito: true)
+                ChromeLauncher.launch(profile: p, incognito: true)
                 dismissUnlessPinned()
             } label: { Label("New Incognito Window", systemImage: "eyeglasses") }
 
-            if axTrusted && open {
+            if !wins.isEmpty {
                 Divider()
                 Button {
                     closeWindows(of: p)
@@ -607,7 +634,8 @@ struct MenuView: View {
 
             Button {
                 let ids = multiSelected
-                ChromeLauncher.launchMany(profiles: loader.profiles.filter { ids.contains($0.id) })
+                ChromeLauncher.launchMany(profiles: loader.profiles.filter { ids.contains($0.id) },
+                                          among: loader.profiles)
                 resetMulti()
                 dismissUnlessPinned()
             } label: {
@@ -623,11 +651,12 @@ struct MenuView: View {
                 }
                 let ids = multiSelected
                 // Keep the user's selection order — it's the order windows tile in.
-                let profilesToTile = ids.compactMap { id in loader.profiles.first { $0.id == id } }
+                let all = loader.profiles
+                let profilesToTile = ids.compactMap { id in all.first { $0.id == id } }
                 resetMulti()
                 dismissUnlessPinned()
                 Task { @MainActor in
-                    await WindowTiler.launchAndTile(profiles: profilesToTile, config: settings.layout)
+                    await WindowTiler.launchAndTile(profiles: profilesToTile, among: all, config: settings.layout)
                 }
             } label: {
                 Label("Tile", systemImage: settings.layout.layout.icon)
@@ -680,7 +709,7 @@ struct MenuView: View {
     /// A link dropped onto a profile row opens immediately in that profile.
     private func handleDroppedURL(_ url: String, on p: ChromeProfile) {
         dropTargetID = nil
-        ChromeLauncher.launchOrFocus(profile: p, url: url)
+        ChromeLauncher.launchOrFocus(profile: p, among: loader.profiles, url: url)
         dismissUnlessPinned()
     }
 
@@ -694,7 +723,7 @@ struct MenuView: View {
             return
         }
         if settings.focusExisting {
-            ChromeLauncher.launchOrFocus(profile: p)
+            ChromeLauncher.launchOrFocus(profile: p, among: loader.profiles)
         } else {
             ChromeLauncher.launch(profile: p)
         }
@@ -710,10 +739,12 @@ struct MenuView: View {
     /// clears. The menu stays open — closing is a management action, and the user may
     /// want to close several profiles in a row.
     private func closeWindows(of p: ChromeProfile) {
+        let profiles = loader.profiles
         Task {
             await Task.detached(priority: .userInitiated) {
-                // AX presses are synchronous IPC to the browser — keep them off the main thread.
-                for w in WindowFinder.windows(forProfile: p) {
+                // A fresh scan with the same rules that listed the row's windows, so "Close 3
+                // Windows" closes those three. AX presses are synchronous IPC — off the main thread.
+                for w in WindowFinder.windows(forProfile: p, among: profiles) {
                     WindowFinder.close(w)
                 }
             }.value
@@ -743,51 +774,34 @@ struct MenuView: View {
 
     private func refreshOpenWindowsAsync() async {
         let profiles = loader.profiles
-        let enabled = settings.enabledBrowsers
         // "Open" must mean "has a visible window," not "the browser process is holding this
         // profile's files open." Chrome keeps per-profile files open (sync, leveldb, extension
         // service workers, background apps) long after the last window of that profile closes,
         // so lsof alone reports a closed profile as active — the phantom open state that sticks
-        // at the top of the list and never clears. So we go per-browser:
+        // at the top of the list and never clears. So we go per-browser (see
+        // `WindowFinder.snapshot`, which focusing, closing and tiling share):
         //   • title-transparent (Chrome multi-profile): AX titles name every open window →
         //     trust them, skip lsof → closed profiles' leases can't create phantoms.
         //   • title-opaque WITH windows (Brave, single-profile Chrome): titles omit the
         //     profile → fall back to lsof to tell which profiles are live.
         //   • no windows at all: nothing is open, regardless of any lingering background process.
         let trusted = axTrusted
-        struct Result {
-            var scan: WindowFinder.WindowScan
-            var activeByBrowser: [Browser: Set<String>]
-        }
-        let result = await Task.detached(priority: .userInitiated) { () -> Result in
-            let scan = WindowFinder.scanWindows(profiles)
-            var active: [Browser: Set<String>] = [:]
-            for b in enabled {
-                let transparent = (scan.tokenMatchCount[b] ?? 0) > 0
-                let hasWindows = (scan.windowCount[b] ?? 0) > 0
-                // Only pay for lsof where AX can't name the windows itself.
-                if !trusted || (!transparent && hasWindows) {
-                    let dirs = Set(profiles.filter { $0.browser == b }.map { $0.dirName })
-                    active[b] = BrowserActivity.activeDirs(for: b, knownDirs: dirs)
-                }
-            }
-            return Result(scan: scan, activeByBrowser: active)
+        let snap = await Task.detached(priority: .userInitiated) {
+            WindowFinder.snapshot(profiles, axTrusted: trusted)
         }.value
         var dict: [String: Bool] = [:]
         for p in profiles {
-            let b = p.browser
-            let windowHit = result.scan.windowByProfileID[p.id] != nil
-            let activeHit = result.activeByBrowser[b]?.contains(p.dirName) ?? false
+            let windowHit = !(snap.scan.windowsByProfileID[p.id] ?? []).isEmpty
+            let activeHit = snap.activeDirs[p.browser]?.contains(p.dirName) ?? false
             if trusted {
-                let transparent = (result.scan.tokenMatchCount[b] ?? 0) > 0
-                dict[p.id] = transparent ? windowHit : (windowHit || activeHit)
+                dict[p.id] = snap.scan.isTitleOpaque(p.browser) ? (windowHit || activeHit) : windowHit
             } else {
                 dict[p.id] = activeHit
             }
         }
         openWindowsByID = dict
-        profileWindows = result.scan.windowsByProfileID
-        NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(trusted) windows=\(result.scan.windowByProfileID.count) tokens=\(result.scan.tokenMatchCount) active=\(result.activeByBrowser)")
+        profileWindows = snap.scan.windowsByProfileID
+        NSLog("[Polychrome] refreshOpenWindows: axTrusted=\(trusted) profilesWithWindows=\(snap.scan.windowsByProfileID.count) tokens=\(snap.scan.tokenWindowCount) active=\(snap.activeDirs)")
     }
 }
 

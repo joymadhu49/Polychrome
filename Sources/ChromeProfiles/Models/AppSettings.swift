@@ -17,12 +17,18 @@ struct HotkeyRegistrationIssue: Equatable {
 
 @MainActor
 final class AppSettings: ObservableObject {
+    /// Mirrors the system's login-item registration rather than a stored preference, so the
+    /// toggle can't claim "on" after a failed registration or a change in System Settings.
     @Published var launchAtLogin: Bool {
         didSet {
-            UserDefaults.standard.set(launchAtLogin, forKey: "launchAtLogin")
+            guard !syncingLaunchAtLogin else { return }
             LaunchAtLogin.set(enabled: launchAtLogin)
+            refreshLaunchAtLogin()
         }
     }
+    /// Registered, but macOS is waiting for the user to allow it in Login Items.
+    @Published private(set) var launchAtLoginNeedsApproval: Bool
+    private var syncingLaunchAtLogin = false
 
     @Published var showEmails: Bool {
         didSet { UserDefaults.standard.set(showEmails, forKey: "showEmails") }
@@ -98,7 +104,11 @@ final class AppSettings: ObservableObject {
         // Clear any previously retained URLs during migration.
         d.removeObject(forKey: "quickLaunchEnabled")
         d.removeObject(forKey: "urlHistory")
-        self.launchAtLogin = d.bool(forKey: "launchAtLogin")
+        // Launch at login used to be a stored flag that could drift from the real registration.
+        d.removeObject(forKey: "launchAtLogin")
+        let loginState = LaunchAtLogin.state
+        self.launchAtLogin = loginState != .disabled
+        self.launchAtLoginNeedsApproval = loginState == .requiresApproval
         self.showEmails = (d.object(forKey: "showEmails") as? Bool) ?? true
         self.focusExisting = (d.object(forKey: "focusExisting") as? Bool) ?? true
         self.groupByStatus = (d.object(forKey: "groupByStatus") as? Bool) ?? true
@@ -141,6 +151,18 @@ final class AppSettings: ObservableObject {
         self.hotkey = HotkeyConfig.load(from: hotkeyDefaults)
         self.layout = LayoutConfig.load()
         if applyThemeOnInit { applyTheme() }
+    }
+
+    /// Re-read the login-item registration — after toggling, and whenever the user may have
+    /// changed it in System Settings.
+    func refreshLaunchAtLogin() {
+        let state = LaunchAtLogin.state
+        syncingLaunchAtLogin = true
+        let on = state != .disabled
+        if launchAtLogin != on { launchAtLogin = on }
+        syncingLaunchAtLogin = false
+        let needsApproval = state == .requiresApproval
+        if launchAtLoginNeedsApproval != needsApproval { launchAtLoginNeedsApproval = needsApproval }
     }
 
     func tag(for profile: ChromeProfile) -> ProfileTag {

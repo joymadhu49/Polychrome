@@ -145,8 +145,4 @@ final class StatusBarController {
     func close() {
         popover.performClose(nil)
     }
-
-    func updateRootView(_ rootView: AnyView) {
-        (popover.contentViewController as? NSHostingController<AnyView>)?.rootView = rootView
-    }
 }
