@@ -21,7 +21,7 @@ compiles and bundles — the baseline for every item below.
 - [x] **One window→profile rule set for the whole app** — the menu, focusing, closing and
   tiling each attributed windows their own way and disagreed. All now go through
   `WindowFinder.snapshot`, with the title rules as a pure, unit-tested function
-  (`WindowAttributionTests`). Fixes three wrong-window bugs: (post-v1.5.0)
+  (`WindowAttributionTests`). Fixes three wrong-window bugs: (v1.6.0)
   - clicking a closed profile could focus a *different* profile's lone window, because
     Chrome keeps a closed profile's files open and lsof called it "active" — lsof no longer
     overrides browsers whose titles name their profiles;
@@ -34,14 +34,14 @@ compiles and bundles — the baseline for every item below.
   cold Chrome start usually tiled without them. Now up to 10 s (ends as soon as all appear);
   title-opaque browsers pair windows that appeared after launching with the launched
   profiles; minimized windows are restored first; frames are set size → position → size so
-  moves between displays land exactly; all AX work is off the main thread. (post-v1.5.0)
+  moves between displays land exactly; all AX work is off the main thread. (v1.6.0)
 - [x] **Launch at login reflects reality** — the toggle was a stored flag that stayed "on"
   after a failed registration or a change in System Settings; it now mirrors
-  `SMAppService`, and shows when macOS is waiting for approval in Login Items. (post-v1.5.0)
+  `SMAppService`, and shows when macOS is waiting for approval in Login Items. (v1.6.0)
 - [x] **Global shortcuts can't hijack typing** — Shift alone (⇧A, ⇧`) is rejected at record
   time except on F-keys; the recorder says what's missing. Saved shortcuts keep working.
-  (post-v1.5.0)
-- [x] **Smaller fixes** (post-v1.5.0): profile names containing parentheses ("Work (old)")
+  (v1.6.0)
+- [x] **Smaller fixes** (v1.6.0): profile names containing parentheses ("Work (old)")
   now match their windows; ⌘1–⌘9 use physical keys so they work on AZERTY and other
   layouts; "Main display" means the display with the menu bar, not wherever the menu was;
   `lsof` runs with `-n -P -Fn` (no DNS lookups) and is skipped for single-profile browsers;
