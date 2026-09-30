@@ -19,7 +19,9 @@ echo "==> creating $DMG"
 # Preferred: a styled installer window (background art, positioned icons,
 # volume icon) via create-dmg — `brew install create-dmg`. The layout matches
 # Bundle/dmg-background.png (regenerate with scripts/make-dmg-background.swift):
-# 600x420 pt window, app icon at (150,210), Applications at (450,210).
+# 640x400 pt of content, app icon at (180,200), Applications at (460,200).
+# Finder's window bounds include the ~32 pt title bar, so the window is 432 tall —
+# sizing it to the artwork alone clipped the bottom of the background.
 styled_dmg() {
     command -v create-dmg >/dev/null 2>&1 || return 1
     local stage
@@ -30,11 +32,11 @@ styled_dmg() {
         --volname "$APP_NAME"
         --background "Bundle/dmg-background.png"
         --window-pos 200 120
-        --window-size 600 420
+        --window-size 640 432
         --icon-size 112
         --text-size 13
-        --icon "${APP_NAME}.app" 150 210
-        --app-drop-link 450 210
+        --icon "${APP_NAME}.app" 180 200
+        --app-drop-link 460 200
         --hide-extension "${APP_NAME}.app"
         --no-internet-enable
     )
