@@ -64,7 +64,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          plist() { python3 -c "import plistlib,sys; print(plistlib.load(sys.stdin.buffer)['$1'])"; }
+          plist() { python3 -c "import plistlib,sys; print(plistlib.loads(sys.stdin.buffer.read())['$1'])"; }
           TAG=""
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="$GITHUB_REF_NAME"
