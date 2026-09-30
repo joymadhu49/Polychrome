@@ -2,33 +2,33 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>Polychrome</string>
-    <key>CFBundleDisplayName</key>
-    <string>Polychrome</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.joymadhu.polychrome</string>
-    <key>CFBundleVersion</key>
-    <string>23</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.4.7</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleExecutable</key>
-    <string>Polychrome</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSHumanReadableCopyright</key>
-    <string>© 2026 joymadhu</string>
-    <key>SUFeedURL</key>
-    <string>https://github.com/joymadhu49/Polychrome/releases/latest/download/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>ajoIDYdrCj59w5c+p+BO7MKoJ8JmwOAeoxDt/YrwuKA=</string>
-    <key>SUEnableAutomaticChecks</key>
-    <true/>
+	<key>CFBundleDisplayName</key>
+	<string>Polychrome</string>
+	<key>CFBundleExecutable</key>
+	<string>Polychrome</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.joymadhu.polychrome</string>
+	<key>CFBundleName</key>
+	<string>Polychrome</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.5.0</string>
+	<key>CFBundleVersion</key>
+	<string>24</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 joymadhu</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/joymadhu49/Polychrome/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>ajoIDYdrCj59w5c+p+BO7MKoJ8JmwOAeoxDt/YrwuKA=</string>
 </dict>
 </plist>
