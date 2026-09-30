@@ -15,12 +15,14 @@ enum BrowserActivity {
         let pidArg = apps.map { String($0.processIdentifier) }.joined(separator: ",")
 
         let task = Process()
-        task.launchPath = "/usr/sbin/lsof"
-        task.arguments = ["-p", pidArg]
+        task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        // -n/-P: never resolve socket addresses or port names (DNS lookups made this slow).
+        // -Fn: machine-readable output with just the file names we parse, not full rows.
+        task.arguments = ["-n", "-P", "-Fn", "-p", pidArg]
         let outPipe = Pipe()
-        let errPipe = Pipe()
         task.standardOutput = outPipe
-        task.standardError = errPipe
+        // Nothing reads stderr, and a full pipe would block lsof forever.
+        task.standardError = FileHandle.nullDevice
         do {
             try task.run()
         } catch {
@@ -42,10 +44,5 @@ enum BrowserActivity {
             if dirs.count == knownDirs.count { break }
         }
         return dirs
-    }
-
-    /// Convenience: is this profile's dir currently open?
-    static func isActive(_ profile: ChromeProfile) -> Bool {
-        activeDirs(for: profile.browser, knownDirs: [profile.dirName]).contains(profile.dirName)
     }
 }

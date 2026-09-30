@@ -50,7 +50,7 @@ struct ProfileRow: View {
     var revealShortcut: Bool = false       // ⌘ is held — show every row's shortcut
     var windowCount: Int = 0               // open windows attributed to this profile (0 = none/unknown)
     var windowAction: ((Int) -> Void)? = nil  // click on window box i (0-based) → focus that window
-    var closeAction: (() -> Void)? = nil   // non-nil only for open profiles (needs AX)
+    var closeAction: (() -> Void)? = nil   // non-nil only when windows are attributed to the profile (needs AX)
     var onHover: () -> Void = {}
     let action: () -> Void
 

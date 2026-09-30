@@ -2,17 +2,12 @@ import Foundation
 import AppKit
 import ApplicationServices
 
+/// Maps browser windows to profiles. Every caller — the menu's open state and window
+/// list, focusing a profile, closing its windows, tiling — goes through `snapshot`, so
+/// they all agree on which window belongs to whom.
 enum WindowFinder {
     private static func runningApps(for browser: Browser) -> [NSRunningApplication] {
         NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID)
-    }
-
-    private static func allBrowserApps(_ browsers: Set<Browser> = Set(Browser.allCases)) -> [(Browser, NSRunningApplication)] {
-        var out: [(Browser, NSRunningApplication)] = []
-        for b in browsers {
-            for app in runningApps(for: b) { out.append((b, app)) }
-        }
-        return out
     }
 
     private static func windows(of pid: pid_t) -> [AXUIElement] {
@@ -29,45 +24,104 @@ enum WindowFinder {
         return raw as? String
     }
 
+    // MARK: title parsing (pure)
+
     /// Chrome/Chromium append the active profile to the macOS *Accessibility* window title
     /// whenever more than one profile has been used (AppleScript hides this; AX does not):
     ///   "<page title> - <App> - <givenName>"                        e.g. "... - Google Chrome - Sumaiya"
     ///   "<page title> - <App> - <givenName> (<profile name>)"       e.g. "... - Google Chrome - Joy (JOY_M)"
-    /// where <App> is `browser.displayName` ("Google Chrome" / "Brave"). The givenName maps to
-    /// `ChromeProfile.givenName` and the parenthetical to `ChromeProfile.displayName`.
+    /// where <App> is `browser.displayName` ("Google Chrome" / "Brave"). Returns the text after
+    /// the marker ("Sumaiya", "Joy (JOY_M)"); `matchProfile` interprets it.
     ///
     /// Returns nil when the marker is absent — single-profile browsers (Brave, or Chrome with one
-    /// profile) omit it, and those are covered by the lone-window + lsof fallback instead.
-    /// Uses the LAST (`.backwards`) marker occurrence so a page title that itself contains
-    /// " - Google Chrome - " can't fool the parser.
-    private static func profileToken(from title: String, appLabel: String) -> (given: String, name: String?)? {
+    /// profile) omit it. Uses the LAST (`.backwards`) marker occurrence so a page title that itself
+    /// contains " - Google Chrome - " can't fool the parser.
+    static func profileToken(from title: String, appLabel: String) -> String? {
         // Chrome uses " - " (ASCII hyphen) on English systems; tolerate em/en-dash locale variants.
         for sep in [" - ", " — ", " – "] {
             let marker = "\(sep)\(appLabel)\(sep)"
             guard let r = title.range(of: marker, options: .backwards) else { continue }
-            var token = String(title[r.upperBound...])
-            var name: String?
-            if token.hasSuffix(")"), let open = token.range(of: " (", options: .backwards) {
-                let inner = token[token.index(open.lowerBound, offsetBy: 2)..<token.index(before: token.endIndex)]
-                name = String(inner)
-                token = String(token[..<open.lowerBound])
-            }
-            guard !token.isEmpty else { continue }
-            return (token, name.flatMap { $0.isEmpty ? nil : $0 })
+            let token = String(title[r.upperBound...])
+            if !token.isEmpty { return token }
         }
         return nil
     }
 
-    /// True when the AX window `title` belongs to `profile`, by parsing Chrome's profile token.
-    private static func titleMatches(_ title: String, profile: ChromeProfile) -> Bool {
-        guard let tok = profileToken(from: title, appLabel: profile.browser.displayName) else { return false }
-        // A parenthetical ("Joy (JOY_M)") appears iff Chrome's profile name differs from the gaia
-        // given name; require it to equal THIS profile's displayName. Matching the given name when a
-        // parenthetical is present would let a profile grab a sibling window that merely shares a
-        // given name, focusing the wrong account.
-        if let n = tok.name { return n == profile.displayName }
-        // No parenthetical iff name == given name, so the token is both — match displayName exactly.
-        return tok.given == profile.displayName
+    /// Every way to read a token as "<given> (<name>)", longest name first. A profile name can
+    /// itself contain parentheses ("Joy (Joy (Work))"), so a single split can't be trusted.
+    static func parentheticalNames(in token: String) -> [String] {
+        guard token.hasSuffix(")") else { return [] }
+        let close = token.index(before: token.endIndex)
+        var names: [String] = []
+        var searchStart = token.startIndex
+        while let r = token.range(of: " (", range: searchStart..<token.endIndex) {
+            if r.lowerBound > token.startIndex, r.upperBound < close {
+                names.append(String(token[r.upperBound..<close]))
+            }
+            searchStart = r.upperBound
+        }
+        return names
+    }
+
+    /// The profile a title token names, or nil when it names none of `profiles`.
+    ///   1. The whole token is a profile name — Chrome omits the parenthetical when the name equals
+    ///      the given name, and a name like "Work (old)" must not be split.
+    ///   2. "<given> (<name>)" — the parenthetical is the profile name. Matching the given name here
+    ///      instead would let a profile grab a sibling's window that merely shares a given name.
+    ///   3. A bare given name that exactly one profile carries.
+    static func matchProfile(token: String, in profiles: [ChromeProfile]) -> ChromeProfile? {
+        if let p = profiles.first(where: { $0.displayName == token }) { return p }
+        let names = parentheticalNames(in: token)
+        for name in names {
+            if let p = profiles.first(where: { $0.displayName == name }) { return p }
+        }
+        guard names.isEmpty else { return nil }
+        let byGiven = profiles.filter { $0.givenName?.isEmpty == false && $0.givenName == token }
+        return byGiven.count == 1 ? byGiven[0] : nil
+    }
+
+    /// Which of one browser's windows belong to which profile, from their titles alone.
+    struct TitleAttribution: Equatable {
+        /// profile.id → indices into the titles, in enumeration order.
+        var indicesByProfileID: [String: [Int]] = [:]
+        /// Indices no profile can be sure of.
+        var unattributed: [Int] = []
+        /// Windows whose title carried a profile marker, known profile or not. Non-zero means the
+        /// browser is "title-transparent": every normal window names its profile, so a profile
+        /// without a matching title has no window, whatever lsof says.
+        var tokenWindowCount = 0
+    }
+
+    /// Pure attribution over one browser's window titles; `profiles` must be every known profile
+    /// of that browser (others are ignored), not just the ones the caller cares about.
+    ///   • A title naming a profile goes to that profile.
+    ///   • A title naming a profile we don't know stays unattributed — it's never handed to some
+    ///     other profile that happens to have no window.
+    ///   • Untokened titles (incognito, DevTools, app windows in a multi-profile browser) stay
+    ///     unattributed — except in a title-opaque browser with a single profile, where every
+    ///     window can only be that profile's.
+    static func attribute(titles: [String], browser: Browser, profiles: [ChromeProfile]) -> TitleAttribution {
+        let own = profiles.filter { $0.browser == browser }
+        var out = TitleAttribution()
+        var untokened: [Int] = []
+        for (i, title) in titles.enumerated() {
+            guard let token = profileToken(from: title, appLabel: browser.displayName) else {
+                untokened.append(i)
+                continue
+            }
+            out.tokenWindowCount += 1
+            if let p = matchProfile(token: token, in: own) {
+                out.indicesByProfileID[p.id, default: []].append(i)
+            } else {
+                out.unattributed.append(i)
+            }
+        }
+        if out.tokenWindowCount == 0, own.count == 1, !untokened.isEmpty {
+            out.indicesByProfileID[own[0].id] = untokened
+        } else {
+            out.unattributed = (out.unattributed + untokened).sorted()
+        }
+        return out
     }
 
     /// The AX title with the browser's trailing marker removed, for display in menus:
@@ -89,57 +143,138 @@ enum WindowFinder {
         return title
     }
 
+    // MARK: scanning
+
     static func pid(of window: AXUIElement) -> pid_t {
         var p: pid_t = 0
         AXUIElementGetPid(window, &p)
         return p
     }
 
-    /// Find the window we can *confidently* attribute to the given profile (scans only this
-    /// profile's browser). On macOS this works in two cases:
-    ///   1. AX-title profile-token match — Chrome/Chromium append the profile to the *Accessibility*
-    ///      window title once more than one profile has been used (see `profileToken`). This is the
-    ///      common, reliable case for multi-profile Chrome and is the one that was previously broken.
-    ///   2. A single lone window AND lsof confirms *this* profile is the one running. Guarding
-    ///      on `isActive` is essential: without it, clicking a *closed* profile while a different
-    ///      profile owns the only window would focus the wrong account. Covers Brave / single-
-    ///      profile Chrome, which omit the profile from the title.
-    /// Returns nil when several profiles' windows coexist and none carry an identifiable profile
-    /// token (e.g. a non-English Chrome whose title format differs), so the caller can fall back to
-    /// relaunching with `--profile-directory`.
-    static func window(forProfile profile: ChromeProfile) -> AXUIElement? {
-        var allWindows: [AXUIElement] = []
-        for app in runningApps(for: profile.browser) {
-            for w in windows(of: app.processIdentifier) {
-                guard let title = axTitle(of: w) else { continue }
-                if titleMatches(title, profile: profile) { return w }
-                allWindows.append(w)
-            }
-        }
-        if allWindows.count == 1, BrowserActivity.isActive(profile) { return allWindows[0] }
-        return nil
+    /// One open window: the raw AX handle plus a menu-ready page title (browser/profile
+    /// marker stripped). Order follows AX enumeration.
+    struct ProfileWindow {
+        let element: AXUIElement
+        let title: String
     }
 
-    /// Every window confidently attributed to the profile — the multi-window counterpart of
-    /// `window(forProfile:)`, for actions that must reach all of them (like closing). Uses the
-    /// same two attribution cases: AX-title profile-token matches, else the lone window when
-    /// lsof confirms this profile is the active one.
-    static func windows(forProfile profile: ChromeProfile) -> [AXUIElement] {
-        var matched: [AXUIElement] = []
-        var unmatched: [AXUIElement] = []
-        for app in runningApps(for: profile.browser) {
-            for w in windows(of: app.processIdentifier) {
-                guard let title = axTitle(of: w) else { continue }
-                if titleMatches(title, profile: profile) {
-                    matched.append(w)
-                } else {
-                    unmatched.append(w)
+    /// Snapshot of every scanned browser's windows.
+    struct WindowScan {
+        /// profile.id → every window attributed to it. The first is the one to focus.
+        var windowsByProfileID: [String: [ProfileWindow]] = [:]
+        /// browser → titled windows no profile could claim.
+        var unattributed: [Browser: [ProfileWindow]] = [:]
+        /// browser → total AX window count of its running process(es).
+        var windowCount: [Browser: Int] = [:]
+        /// browser → windows whose title carried a profile marker (see `TitleAttribution`).
+        var tokenWindowCount: [Browser: Int] = [:]
+
+        /// Titles don't name profiles (Brave, single-profile Chrome), so lsof has to help.
+        func isTitleOpaque(_ browser: Browser) -> Bool { (tokenWindowCount[browser] ?? 0) == 0 }
+
+        /// A title-opaque browser with several profiles can't say whose its windows are. Its lone
+        /// window is a profile's only when lsof reports that profile as the browser's ONE live
+        /// profile: Chrome keeps a closed profile's files open for a long time, so "this profile
+        /// is active" alone can't tell its window from a sibling's.
+        mutating func applyActivity(_ activeDirs: Set<String>, browser: Browser, profiles: [ChromeProfile]) {
+            guard isTitleOpaque(browser), windowCount[browser] == 1, activeDirs.count == 1,
+                  let lone = unattributed[browser], lone.count == 1,
+                  let owner = profiles.first(where: { $0.browser == browser && activeDirs.contains($0.dirName) }),
+                  windowsByProfileID[owner.id] == nil else { return }
+            windowsByProfileID[owner.id] = lone
+            unattributed[browser] = nil
+        }
+    }
+
+    /// Scan the running browsers of `profiles` and attribute their windows from titles alone.
+    /// Pass every known profile, not a subset (see `attribute`). Synchronous AX IPC — call off
+    /// the main thread.
+    static func scanWindows(_ profiles: [ChromeProfile]) -> WindowScan {
+        var scan = WindowScan()
+        for (browser, own) in Dictionary(grouping: profiles, by: \.browser) {
+            var titles: [String] = []
+            var titled: [ProfileWindow] = []
+            for app in runningApps(for: browser) {
+                let ws = windows(of: app.processIdentifier)
+                scan.windowCount[browser, default: 0] += ws.count
+                for w in ws {
+                    guard let title = axTitle(of: w) else { continue }
+                    titles.append(title)
+                    titled.append(ProfileWindow(element: w, title: pageTitle(from: title, appLabel: browser.displayName)))
                 }
             }
+            let a = attribute(titles: titles, browser: browser, profiles: own)
+            scan.tokenWindowCount[browser] = a.tokenWindowCount
+            for (id, indices) in a.indicesByProfileID {
+                scan.windowsByProfileID[id] = indices.map { titled[$0] }
+            }
+            if !a.unattributed.isEmpty {
+                scan.unattributed[browser] = a.unattributed.map { titled[$0] }
+            }
         }
-        if matched.isEmpty, unmatched.count == 1, BrowserActivity.isActive(profile) { return unmatched }
-        return matched
+        return scan
     }
+
+    struct Snapshot {
+        var scan: WindowScan
+        /// browser → profile dirs lsof reports live. Only present where lsof was needed: every
+        /// browser without AX access, else title-opaque browsers with windows and several profiles.
+        var activeDirs: [Browser: Set<String>]
+    }
+
+    /// Window scan plus the lsof fallback, wherever titles can't answer on their own. Pass every
+    /// known profile. Synchronous AX IPC and `lsof` — call off the main thread.
+    static func snapshot(_ profiles: [ChromeProfile], axTrusted: Bool = true) -> Snapshot {
+        var scan = axTrusted ? scanWindows(profiles) : WindowScan()
+        var active: [Browser: Set<String>] = [:]
+        for (browser, own) in Dictionary(grouping: profiles, by: \.browser) {
+            if axTrusted {
+                // Titles name every window, or a lone profile owns them all: lsof adds nothing.
+                // No windows: nothing is open, whatever background process lingers.
+                guard scan.isTitleOpaque(browser), (scan.windowCount[browser] ?? 0) > 0, own.count > 1 else { continue }
+            }
+            let dirs = BrowserActivity.activeDirs(for: browser, knownDirs: Set(own.map(\.dirName)))
+            active[browser] = dirs
+            if axTrusted { scan.applyActivity(dirs, browser: browser, profiles: own) }
+        }
+        return Snapshot(scan: scan, activeDirs: active)
+    }
+
+    private static func browserSiblings(of profile: ChromeProfile, in profiles: [ChromeProfile]) -> [ChromeProfile] {
+        var own = profiles.filter { $0.browser == profile.browser }
+        if !own.contains(where: { $0.id == profile.id }) { own.append(profile) }
+        return own
+    }
+
+    enum FocusTarget {
+        /// A window we can confidently tie to the profile.
+        case window(AXUIElement)
+        /// The profile is live in a title-opaque browser whose windows can't be told apart:
+        /// bring the browser forward rather than spawn a duplicate window.
+        case browser
+        /// The profile has no window.
+        case noWindow
+    }
+
+    /// Where clicking `profile` should land. `profiles` is every known profile — attribution needs
+    /// the profile's siblings to rule their windows out. Call off the main thread.
+    static func focusTarget(for profile: ChromeProfile, among profiles: [ChromeProfile]) -> FocusTarget {
+        let snap = snapshot(browserSiblings(of: profile, in: profiles))
+        if let w = snap.scan.windowsByProfileID[profile.id]?.first { return .window(w.element) }
+        // `activeDirs` only exists for title-opaque browsers that have windows. Where titles name
+        // profiles, no matching title means no window — lsof's lingering file handles don't count.
+        if snap.activeDirs[profile.browser]?.contains(profile.dirName) == true { return .browser }
+        return .noWindow
+    }
+
+    /// Every window attributed to the profile — the same set the menu lists for it. Call off the
+    /// main thread.
+    static func windows(forProfile profile: ChromeProfile, among profiles: [ChromeProfile]) -> [AXUIElement] {
+        let snap = snapshot(browserSiblings(of: profile, in: profiles))
+        return (snap.scan.windowsByProfileID[profile.id] ?? []).map(\.element)
+    }
+
+    // MARK: actions
 
     /// Close a window by pressing its AX close button — equivalent to clicking the red
     /// traffic light, so Chrome runs its normal teardown (session save, beforeunload).
@@ -151,111 +286,10 @@ enum WindowFinder {
         AXUIElementPerformAction(button, kAXPressAction as CFString)
     }
 
-    /// One open window attributed to a profile: the raw AX handle plus a menu-ready
-    /// page title (browser/profile marker stripped). Order follows AX enumeration.
-    struct ProfileWindow {
-        let element: AXUIElement
-        let title: String
-    }
-
-    /// Per-browser snapshot of currently open windows.
-    struct WindowScan {
-        /// profile.id → a window we could attribute to it (title-token match, or the
-        /// lone-window fallback for opaque single-profile browsers).
-        var windowByProfileID: [String: AXUIElement] = [:]
-        /// profile.id → every window attributed to it, for per-window switching in the menu.
-        var windowsByProfileID: [String: [ProfileWindow]] = [:]
-        /// browser → total AX window count of its running process(es).
-        var windowCount: [Browser: Int] = [:]
-        /// browser → number of windows matched via an actual profile token in the title.
-        /// Zero means the browser is "title-opaque" (Brave / single-profile Chrome omit
-        /// the profile from AX titles); >0 means "title-transparent" (Chrome multi-profile,
-        /// where AX alone can identify every open window and lsof is unnecessary).
-        var tokenMatchCount: [Browser: Int] = [:]
-    }
-
-    /// Scan every running browser's windows and attribute them to profiles where possible.
-    static func scanWindows(_ profiles: [ChromeProfile]) -> WindowScan {
-        var scan = WindowScan()
-        var browserProfiles: [Browser: [ChromeProfile]] = [:]
-        for p in profiles { browserProfiles[p.browser, default: []].append(p) }
-
-        var unmatchedByBrowser: [Browser: [ProfileWindow]] = [:]
-        for (browser, app) in allBrowserApps(Set(browserProfiles.keys)) {
-            let profilesOfBrowser = browserProfiles[browser] ?? []
-            let ws = windows(of: app.processIdentifier)
-            scan.windowCount[browser, default: 0] += ws.count
-            for w in ws {
-                guard let title = axTitle(of: w) else { continue }
-                let pw = ProfileWindow(element: w, title: pageTitle(from: title, appLabel: browser.displayName))
-                // Prefer a parenthetical display-name match over a given-name match so two profiles
-                // that share a given name (e.g. "Joy (JOY_M)" vs "Joy (Personal)") don't collide.
-                guard let tok = profileToken(from: title, appLabel: browser.displayName) else {
-                    unmatchedByBrowser[browser, default: []].append(pw)
-                    continue
-                }
-                let byName = tok.name.flatMap { n in profilesOfBrowser.first { $0.displayName == n } }
-                let match = byName
-                    ?? profilesOfBrowser.first { p in (p.givenName.map { !$0.isEmpty && tok.given == $0 } ?? false) }
-                    ?? profilesOfBrowser.first { $0.displayName == tok.given }
-                if let p = match {
-                    scan.tokenMatchCount[browser, default: 0] += 1
-                    if scan.windowByProfileID[p.id] == nil { scan.windowByProfileID[p.id] = w }
-                    scan.windowsByProfileID[p.id, default: []].append(pw)
-                } else {
-                    unmatchedByBrowser[browser, default: []].append(pw)
-                }
-            }
-        }
-        // Fallback: per-browser, if exactly one window is unmatched and exactly one profile of that
-        // browser is still unmapped, pair them. Handles Brave / single-profile Chrome (no profile
-        // token in the title) for the common single-profile case.
-        for (browser, unmatched) in unmatchedByBrowser {
-            let profilesOfBrowser = browserProfiles[browser] ?? []
-            let unmapped = profilesOfBrowser.filter { scan.windowByProfileID[$0.id] == nil }
-            guard unmapped.count == 1, !unmatched.isEmpty else { continue }
-            let p = unmapped[0]
-            if unmatched.count == 1 {
-                scan.windowByProfileID[p.id] = unmatched[0].element
-            }
-            // Per-window list: when the browser exposes no profile tokens at all (Brave /
-            // single-profile Chrome), every unmatched window can only belong to the one
-            // unmapped profile — list them all. When tokens ARE present, a stray unmatched
-            // window may belong to someone else (incognito, guest); only the lone-window
-            // pairing is safe to list.
-            if (scan.tokenMatchCount[browser] ?? 0) == 0 || unmatched.count == 1 {
-                scan.windowsByProfileID[p.id, default: []].append(contentsOf: unmatched)
-            }
-        }
-        return scan
-    }
-
-    /// Build a map of profile.id → AXUIElement for the given profiles.
-    static func allWindowsMappedToProfiles(_ profiles: [ChromeProfile]) -> [String: AXUIElement] {
-        scanWindows(profiles).windowByProfileID
-    }
-
-    /// True when the browser has at least one on-screen window. Lets callers tell an
-    /// "active" profile (per lsof) that actually has a window from one that's merely a
-    /// background process holding files open.
-    static func hasWindows(_ browser: Browser) -> Bool {
-        for app in runningApps(for: browser) where !windows(of: app.processIdentifier).isEmpty {
-            return true
-        }
-        return false
-    }
-
     /// Bring the browser's existing windows to the front without spawning a new one.
     static func activate(_ browser: Browser) {
         for app in runningApps(for: browser) {
             app.activate(options: [.activateIgnoringOtherApps])
-        }
-    }
-
-    /// Debug helper.
-    static func allBrowserTitles(_ browsers: Set<Browser> = Set(Browser.allCases)) -> [String] {
-        allBrowserApps(browsers).flatMap { (_, app) in
-            windows(of: app.processIdentifier).compactMap(axTitle)
         }
     }
 

@@ -24,8 +24,12 @@ struct DisplayInfo: Identifiable, Hashable {
 }
 
 enum DisplayService {
+    /// `isMain` marks the primary display — the one carrying the menu bar, which AppKit always
+    /// lists first. (`NSScreen.main` is whichever screen holds the key window, so "Main display"
+    /// used to depend on where the menu happened to be.)
     static func screens() -> [DisplayInfo] {
-        NSScreen.screens.enumerated().compactMap { idx, screen in
+        let primary = NSScreen.screens.first
+        return NSScreen.screens.enumerated().compactMap { idx, screen in
             guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
                 return nil
             }
@@ -36,7 +40,7 @@ enum DisplayService {
                 name: name,
                 frame: screen.frame,
                 visibleFrame: screen.visibleFrame,
-                isMain: screen == NSScreen.main
+                isMain: screen == primary
             )
         }
     }
